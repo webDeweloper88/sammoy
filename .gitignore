@@ -1,0 +1,25 @@
+# Secrets / local configuration
+.env
+*.secret
+*.key
+
+# Runtime data
+data/*
+!data/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Node
+node_modules/
+
+# Logs
+*.log
+logs/
+
+# IDE / OS
+.vscode/
+.DS_Store
