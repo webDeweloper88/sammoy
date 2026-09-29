@@ -1,0 +1,4 @@
+pymodbus==3.6.9
+pyserial==3.5
+PyYAML==6.0.2
+gpiod==1.5.4
