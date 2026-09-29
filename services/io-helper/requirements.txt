@@ -4,3 +4,5 @@ PyYAML==6.0.2
 gpiod==1.5.4
 fastapi==0.115.6
 uvicorn==0.34.0
+smbus2==0.6.1
+adafruit-circuitpython-pn532==2.4.9

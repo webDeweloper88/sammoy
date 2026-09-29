@@ -1,0 +1,13 @@
+[Unit]
+Description=Use I2C engine mode for PN532 on Radxa Cubie A7A
+After=systemd-udev-trigger.service
+Before=docker.service
+ConditionPathExists=/sys/bus/platform/devices/2517000.twi/twi_mode
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo 0 > /sys/bus/platform/devices/2517000.twi/twi_mode'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

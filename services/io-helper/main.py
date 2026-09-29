@@ -1,13 +1,17 @@
 import os
 import threading
+import time
+from datetime import datetime, timezone
+from output_test import OutputTest
 from datetime import timedelta
 
 import gpiod
 import yaml
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 from pymodbus.client import ModbusSerialClient
+from rfid import RfidReader
 
 
 CONFIG_FILE = os.getenv("IO_CONFIG", "/config/io-map.yaml")
@@ -15,6 +19,8 @@ CONFIG_FILE = os.getenv("IO_CONFIG", "/config/io-map.yaml")
 app = FastAPI(title="SAMMOY 2.0 io-helper")
 
 state_lock = threading.Lock()
+output_test = OutputTest()
+started_monotonic = time.monotonic()
 
 io_state = {
     "inputs": {},
@@ -23,6 +29,7 @@ io_state = {
     "raw_outputs": [],
     "nv9_pulses": 0,
     "modbus_ok": False,
+    "last_poll_at": None,
 }
 
 
@@ -181,6 +188,8 @@ def health():
         return {
             "status": "ok",
             "modbus_ok": io_state["modbus_ok"],
+            "last_poll_at": io_state["last_poll_at"],
+            "uptime_seconds": int(time.monotonic() - started_monotonic),
         }
 
 
@@ -193,8 +202,20 @@ def get_io():
             "outputs": dict(io_state["outputs"]),
             "raw_outputs": list(io_state["raw_outputs"]),
             "nv9_pulses": io_state["nv9_pulses"],
+            "last_poll_at": io_state["last_poll_at"],
+            "test_output": output_test.active,
             "modbus_ok": io_state["modbus_ok"],
         }
+
+
+@app.get("/rfid/latest")
+def rfid_latest():
+    return {"ok": True, **APP_STATE["rfid"].snapshot()}
+
+
+@app.get("/rfid/events")
+def rfid_events(since: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=1000)):
+    return APP_STATE["rfid"].events_since(since, limit)
 
 
 @app.post("/outputs/{name}")
@@ -217,10 +238,10 @@ def set_output(name: str, command: OutputCommand):
         )
 
     try:
-        actual = controller.write_output(
-            name,
-            command.on,
-        )
+        with output_test.lock:
+            if command.on and output_test.active is not None:
+                raise HTTPException(409, "An output test is running")
+            actual = controller.write_output(name, command.on)
 
         update_output_state(controller)
 
@@ -231,6 +252,8 @@ def set_output(name: str, command: OutputCommand):
             "actual": actual,
         }
 
+    except HTTPException:
+        raise
     except Exception as exc:
         with state_lock:
             io_state["modbus_ok"] = False
@@ -239,6 +262,33 @@ def set_output(name: str, command: OutputCommand):
             status_code=503,
             detail=str(exc),
         )
+
+
+@app.get("/configuration")
+def configuration():
+    cfg = APP_STATE["controller"].cfg
+    return {"ok": True, "transport": cfg["transport"], "bill_acceptor": cfg["bill_acceptor"],
+            "rfid": cfg.get("rfid", {}), "inputs": cfg["inputs"], "outputs": cfg["outputs"],
+            "nv9_listener_alive": bool(APP_STATE.get("nv9_thread") and APP_STATE["nv9_thread"].is_alive())}
+
+
+@app.post("/outputs/{name}/test")
+def test_output(name: str):
+    controller = APP_STATE["controller"]
+    if name not in controller.output_map:
+        raise HTTPException(404, "Unknown output")
+    with state_lock:
+        ready = io_state["modbus_ok"]
+    if not ready:
+        raise HTTPException(503, "Modbus is not available")
+    try:
+        return output_test.run(controller, name, update_output_state)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        with state_lock:
+            io_state["modbus_ok"] = False
+        raise HTTPException(503, "Output test or OFF readback failed") from exc
 
 
 def nv9_listener(cfg, counter, stop_event):
@@ -348,6 +398,7 @@ def modbus_loop(
                     ]
                     io_state["inputs"] = logical
                     io_state["modbus_ok"] = True
+                    io_state["last_poll_at"] = datetime.now(timezone.utc).isoformat()
 
             except Exception as exc:
                 with state_lock:
@@ -377,6 +428,11 @@ def main():
 
     controller = ModbusController(cfg)
     APP_STATE["controller"] = controller
+    rfid = RfidReader(cfg.get("rfid", {}))
+    APP_STATE["rfid"] = rfid
+    rfid_thread = threading.Thread(
+        target=rfid.run, args=(stop_event,), name="pn532-reader", daemon=True,
+    )
 
     print(
         "SAMMOY 2.0 io-helper",
@@ -410,8 +466,10 @@ def main():
         daemon=True,
     )
 
+    APP_STATE["nv9_thread"] = nv9_thread
     nv9_thread.start()
     modbus_thread.start()
+    rfid_thread.start()
 
     try:
         uvicorn.run(
@@ -431,6 +489,7 @@ def main():
 
         nv9_thread.join(timeout=2)
         modbus_thread.join(timeout=3)
+        rfid_thread.join(timeout=3)
 
         print(
             f"Stopped. NV9 total pulses: "

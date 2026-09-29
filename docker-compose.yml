@@ -1,0 +1,189 @@
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: sammoy2-postgres
+    restart: unless-stopped
+
+    environment:
+      TZ: Asia/Tashkent
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+
+    ports:
+      - "127.0.0.1:5432:5432"
+
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+    networks:
+      - sammoy2
+
+
+  io-helper:
+    build:
+      context: ./services/io-helper
+
+    image: sammoy2-io-helper:latest
+    container_name: sammoy2-io-helper
+    restart: unless-stopped
+
+    environment:
+      TZ: Asia/Tashkent
+      IO_CONFIG: /config/io-map.yaml
+
+    volumes:
+      - ./config/io-map.yaml:/config/io-map.yaml:ro
+
+    devices:
+      - /dev/gpiochip0:/dev/gpiochip0
+      - /dev/ttyUSB0:/dev/ttyUSB0
+      - /dev/i2c-7:/dev/i2c-7
+
+    ports:
+      - "127.0.0.1:8080:8080"
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3)); assert d.get('status') == 'ok'"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+    networks:
+      - sammoy2
+
+
+  wash-engine:
+    build:
+      context: ./services/wash-engine
+
+    image: sammoy2-wash-engine:latest
+    container_name: sammoy2-wash-engine
+    restart: unless-stopped
+
+    environment:
+      TZ: Asia/Tashkent
+
+      WASH_ENGINE_POSTGRES_HOST: postgres
+      WASH_ENGINE_POSTGRES_PORT: 5432
+      WASH_ENGINE_POSTGRES_DB: ${POSTGRES_DB}
+      WASH_ENGINE_POSTGRES_USER: ${POSTGRES_USER}
+      WASH_ENGINE_POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+
+      WASH_ENGINE_JWT_SECRET: ${WASH_ENGINE_JWT_SECRET}
+
+      WASH_ENGINE_DEFAULT_OWNER_LOGIN: owner
+      WASH_ENGINE_DEFAULT_OWNER_PASSWORD: ${WASH_ENGINE_DEFAULT_OWNER_PASSWORD}
+
+      WASH_ENGINE_DEFAULT_ADMIN_LOGIN: admin
+      WASH_ENGINE_DEFAULT_ADMIN_PASSWORD: ${WASH_ENGINE_DEFAULT_ADMIN_PASSWORD}
+
+      TELEGRAM_SETUP_URL: http://telegram-reports:8076
+      TELEGRAM_SETUP_KEY: ${TELEGRAM_SETUP_KEY:-}
+
+      WASH_ENGINE_IO_HELPER_URL: http://io-helper:8080
+
+      WASH_ENGINE_CLICK_ENABLED: "false"
+      WASH_ENGINE_LICENSE_ENABLED: "false"
+
+      WASH_ENGINE_KIOSK_ASSETS_DIR: /var/lib/rtu-wash/kiosk-assets
+
+    volumes:
+      - ./data/kiosk-assets:/var/lib/rtu-wash/kiosk-assets
+      - /sys:/host-sys:ro
+      - /etc/hostname:/host-etc/hostname:ro
+      - /run/sammoy2-admin:/run/sammoy2-admin:ro
+
+    ports:
+      - "127.0.0.1:8090:8080"
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      io-helper:
+        condition: service_healthy
+
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+    networks:
+      - sammoy2
+
+  telegram-reports:
+    build:
+      context: ./services/telegram-reports
+    image: sammoy2-telegram-reports:latest
+    container_name: sammoy2-telegram-reports
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Tashkent
+      TELEGRAM_SETUP_KEY: ${TELEGRAM_SETUP_KEY:-}
+      REPORT_API_KEY: ${REPORT_API_KEY:-}
+      REPORT_POSTGRES_DSN: ${REPORT_POSTGRES_DSN:-}
+      REPORT_LAN_CIDR: ${REPORT_LAN_CIDR:-}
+    volumes:
+      - reports-data:/data
+    ports:
+      - "0.0.0.0:8091:8091"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request; urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8076/status',headers={'Authorization':'Bearer '+os.environ['TELEGRAM_SETUP_KEY']}),timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 15s
+    networks:
+      - sammoy2
+
+  kiosk-ui:
+    build:
+      context: ./apps/kiosk-ui
+    image: sammoy2-kiosk-ui:latest
+    container_name: sammoy2-kiosk-ui
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:80"
+    depends_on:
+      wash-engine:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - sammoy2
+
+
+networks:
+  sammoy2:
+    name: sammoy2
+
+volumes:
+  reports-data:

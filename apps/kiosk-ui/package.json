@@ -1,0 +1,21 @@
+{
+  "name": "sammoy2-kiosk-ui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "test:touch": "node tests/touch.mjs",
+    "test:owner": "node tests/owner.mjs",
+    "test:install": "node tests/install.mjs"
+  },
+  "dependencies": {
+    "@vitejs/plugin-vue": "^6.0.1",
+    "vite": "^7.0.0",
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}
