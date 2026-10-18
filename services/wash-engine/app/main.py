@@ -3982,3 +3982,9 @@ async def commissioning_telegram_action(action: Literal['configure-auto', 'pairi
 
 from .contact_api import router as contact_router
 app.include_router(contact_router)
+
+
+@app.get('/api/device/profiles')
+def device_profile_catalog():
+    from .device_profiles import catalog
+    return catalog()

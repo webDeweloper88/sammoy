@@ -114,3 +114,9 @@
 .program-card-grid>.program-card:last-child:nth-child(odd){grid-column:1 / -1}
 .wash-kiosk[data-design=cards] .topup-title{display:grid;gap:calc(6 * var(--u));text-align:left}
 .wash-kiosk[data-design=cards] .topup-title small{font-size:calc(22 * var(--u));font-weight:400;line-height:1.2;color:#e1f3ff}
+
+.dry-fog-design .wash-brand strong{font-size:calc(39 * var(--u));font-style:normal;letter-spacing:-.035em}
+.dry-fog-design .program-card-copy strong{font-size:calc(34 * var(--u))!important;line-height:1.12}
+.dry-fog-design .wash-optional button strong{font-size:calc(24 * var(--u))!important;line-height:1.15}
+.dry-fog-design .wash-optional button .mode-photo{object-position:75% center}
+.dry-fog-design .wash-topup .topup-title strong{font-size:calc(30 * var(--u));text-transform:none}

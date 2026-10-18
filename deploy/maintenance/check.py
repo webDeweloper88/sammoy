@@ -8,7 +8,7 @@ def engine_args(stage,network='none'):
  return ['run','--rm','--network',network,'--read-only','--tmpfs','/tmp:rw,size=256m','-e','WASH_ENGINE_DEFAULT_OWNER_PASSWORD=test-only-owner','-e','WASH_ENGINE_DEFAULT_ADMIN_PASSWORD=test-only-admin','-e','WASH_ENGINE_KIOSK_ASSETS_DIR=/tmp/kiosk-assets','-e','PYTHONPATH=/app:/suite/tests:/suite/integration','-v',str(PROJECT/'services/wash-engine/app')+':/app/app:ro','-v',str(stage)+':/suite:ro','-w','/suite']
 def units(stage):
  docker(*engine_args(stage),'sammoy2-wash-engine:latest','python','-m','unittest','discover','-s','tests','-p','test_*.py','-q')
- docker('run','--rm','--network','none','--read-only','--tmpfs','/tmp:rw,size=32m','-e','PYTHONPATH=/suite','-v',str(PROJECT/'services/io-helper')+':/suite:ro','-w','/suite','sammoy2-io-helper:latest','python','-m','unittest','test_input_filter','test_controller_lease','test_output_safety','test_output_test','test_pulse_journal','test_rfid','-q')
+ docker('run','--rm','--network','none','--read-only','--tmpfs','/tmp:rw,size=32m','-e','PYTHONPATH=/suite','-v',str(PROJECT/'services/io-helper')+':/suite:ro','-w','/suite','sammoy2-io-helper:latest','python','-m','unittest','test_input_filter','test_controller_lease','test_output_safety','test_output_test','test_pulse_journal','test_rfid','test_hardware_profile','-q')
  subprocess.run(['python3','-m','unittest','discover','-s',str(PROJECT/'deploy/maintenance'),'-p','test_*.py','-q'],check=True)
 def postgres(stage):
  nonce=uuid.uuid4().hex;network='sammoy-check-'+nonce;container=network+'-pg';password=uuid.uuid4().hex

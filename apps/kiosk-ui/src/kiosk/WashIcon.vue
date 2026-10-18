@@ -19,5 +19,9 @@ const paths = {
  coins:'M8 15c0-13 48-13 48 0s-48 13-48 0Z M8 15v13c0 13 48 13 48 0V15 M8 29v13c0 13 48 13 48 0V29 M8 43v9c0 13 48 13 48 0v-9',
  close:'M15 15 49 49 M49 15 15 49',phone:'m15 5 12 15-8 8q5 12 17 17l8-8 15 12q-3 12-13 10C24 52 12 40 5 18 3 8 15 5 15 5Z'
 }
+const scent='M24 10h16v9H24Z M20 22h24l5 33H15Z M32 2v5 M48 8l5-4 M51 18h8'
+for(const id of ['aroma_1','aroma_2','aroma_3','aroma_4','aroma_5'])paths[id]=scent
+paths.blackening='M32 5a20 27 0 1 0 0 54a20 27 0 0 0 0-54 M32 14a11 18 0 1 0 0 36a11 18 0 0 0 0-36 M12 15l8 4 M9 30h9 M12 45l8-4 M44 15l8 4 M46 30h9 M44 45l8-4'
+paths.tank_air='M26 5a17 26 0 1 0 0 52a17 26 0 0 0 0-52 M26 15a8 16 0 1 0 0 32a8 16 0 0 0 0-32 M36 35h13v13h11 M49 35V23h10'
 </script>
 <template><svg :data-icon="name" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><template v-if="name==='pause'"><rect x="18" y="13" width="10" height="38" rx="3" fill="currentColor" stroke="none"/><rect x="36" y="13" width="10" height="38" rx="3" fill="currentColor" stroke="none"/></template><path v-else-if="name==='play'" d="M24 13 51 30a2.4 2.4 0 0 1 0 4L24 51a2.4 2.4 0 0 1-4-2V15a2.4 2.4 0 0 1 4-2Z" fill="currentColor" stroke="none"/><rect v-else-if="name==='stop'" x="15" y="15" width="34" height="34" rx="4" fill="currentColor" stroke="none"/><path v-else :d="paths[name] || paths.water" /></svg></template>

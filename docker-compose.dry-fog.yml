@@ -1,0 +1,5 @@
+# Staged profile: activate only after the matching dry-fog engine is accepted.
+services:
+  io-helper:
+    volumes:
+      - ./config/io-map.dry-fog.yaml:/config/io-map.yaml:ro

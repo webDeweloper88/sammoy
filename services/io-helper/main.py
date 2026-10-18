@@ -208,8 +208,11 @@ class ModbusController:
 
 
 def load_config():
+    from hardware_profile import validate_profile
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    validate_profile(cfg)
+    return cfg
 
 
 def update_output_state(controller):
@@ -241,6 +244,7 @@ def get_io():
     safety=APP_STATE["lease"].snapshot()
     with state_lock:
         return {
+            "device_type": APP_STATE["controller"].cfg.get("device_type", "wash"),
             "inputs": dict(io_state["inputs"]),
             "raw_inputs": list(io_state["raw_inputs"]),
             "outputs": dict(io_state["outputs"]),

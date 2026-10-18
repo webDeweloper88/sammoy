@@ -15,10 +15,10 @@ if (['/', '/wash', '/preview/idle'].includes(location.pathname)) {
   document.head.appendChild(preload)
 }
 
-if (['/', '/wash', '/preview/wash'].includes(location.pathname)) {
-  document.title = 'LABRIX WASH'
+if (['/', '/wash', '/preview/wash', '/preview/dry-fog'].includes(location.pathname)) {
+  document.title = location.pathname==='/preview/dry-fog'?'LABRIX DRY FOG':'LABRIX WASH'
   document.documentElement.classList.add('customer-kiosk')
 }
 
-const root = ['/', '/wash', '/preview/wash'].includes(location.pathname) ? WashScreen : location.pathname === '/preview/idle' ? IdlePreview : location.pathname === '/install' ? InstallPage : App
-createApp(root,root===WashScreen?{preview:location.pathname==='/preview/wash'}:{}).mount('#app')
+const root = ['/', '/wash', '/preview/wash', '/preview/dry-fog'].includes(location.pathname) ? WashScreen : location.pathname === '/preview/idle' ? IdlePreview : location.pathname === '/install' ? InstallPage : App
+createApp(root,root===WashScreen?{preview:['/preview/wash','/preview/dry-fog'].includes(location.pathname),previewKind:location.pathname==='/preview/dry-fog'?'dry_fog':'wash'}:{}).mount('#app')

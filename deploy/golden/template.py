@@ -34,7 +34,7 @@ def export(destination, project=PROJECT):
                             raise ValueError('Source contains a symlink; supply a plain-file template')
                 shutil.copytree(source, destination / relative, ignore=ignore)
         shutil.copyfile(project / 'docker-compose.yml', destination / 'docker-compose.yml')
-        for name in ('docker-compose.factory.yml', 'docker-compose.relay-only.yml', 'docker-compose.nfc-relay.yml'):
+        for name in ('docker-compose.factory.yml', 'docker-compose.relay-only.yml', 'docker-compose.nfc-relay.yml', 'docker-compose.dry-fog.yml'):
             if (project / name).exists():
                 shutil.copyfile(project / name, destination / name)
         (destination / 'GOLDEN_TEMPLATE.json').write_text(json.dumps({'format': 1, 'state': 'uncommissioned', 'database_included': False}, indent=2)+'\n')

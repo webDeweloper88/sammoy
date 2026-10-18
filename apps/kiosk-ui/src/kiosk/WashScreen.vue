@@ -1,4 +1,5 @@
 <script setup>
+import {dryFogIds,dryFogAdditional,dryFogLabels,dryFogDescriptions,dryFogTones,dryFogTexts} from './dry-fog.js'
 import { walletErrorText } from './card-feedback.js'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import {modePhoto} from './theme2-media.js'
@@ -20,8 +21,8 @@ import './light.css'
 import './wheel-status.css'
 import {brandTitle,brandSubtitle,defaultLanguage} from './presentation.js'
 import { resolveAppearance } from './appearance.js'
-const props=defineProps({preview:{type:Boolean,default:false}})
-const runtime=props.preview?useWashPreview():useWashState()
+const props=defineProps({preview:{type:Boolean,default:false},previewKind:{type:String,default:'wash'}})
+const runtime=props.preview?useWashPreview(props.previewKind):useWashState()
 const language=ref('uz'),paymentOpen=ref(false),paymentPending=ref(false),socialOpen=ref(false)
 const {state,parameters,config,paymentOptions,station,receivedAt,now,fresh,ready,busy,error,select}=runtime
 if(props.preview){const demo=new URLSearchParams(window.location.search);if(demo.get('design')==='cards')config.value.theme.design='cards';if(['light','dark'].includes(demo.get('theme')))config.value.theme.appearance.manualTheme=demo.get('theme')}
@@ -33,7 +34,8 @@ const design=computed(()=>config.value?.theme?.design==='cards'?'cards':'wheel')
 const appearance=computed(()=>resolveAppearance(lastAppearance.value,new Date(now.value)))
 const idleBlocked=computed(()=>paymentOpen.value||paymentPending.value||socialOpen.value||props.preview)
 const {visible:idleVisible,wake}=useIdleScreen(state,receivedAt,idleBlocked)
-const t=computed(()=>washTexts[language.value])
+const dryFog=computed(()=>props.preview&&props.previewKind==='dry_fog')
+const t=computed(()=>({...washTexts[language.value],...(dryFog.value?dryFogTexts[language.value]:{})}))
 const credit=computed(()=>state.value?.creditSum)
 const selected=computed(()=>state.value?.activeMode||state.value?.armedMode)
 const manualPause=computed(()=>state.value?.selectedMode==='pause'&&Boolean(state.value?.armedMode))
@@ -74,13 +76,13 @@ const time=computed(()=>{
 })
 const isVip=computed(()=>state.value?.activeSessionSource==='vip')
 const balance=computed(()=>isVip.value?'VIP':fresh.value&&Number.isFinite(credit.value)?credit.value.toLocaleString('ru-RU'):'—')
-const programs=computed(()=>['foam','wax','osmos','nano','chem','water','air','vacuum'].filter(id=>parameters.value?.tariffs?.[id]?.enabled===true&&config.value?.programs?.some(p=>p.id===id&&p.visible!==false)).map(id=>{
+const programs=computed(()=>(dryFog.value?dryFogIds:['foam','wax','osmos','nano','chem','water','air','vacuum']).filter(id=>parameters.value?.tariffs?.[id]?.enabled===true&&config.value?.programs?.some(p=>p.id===id&&p.visible!==false)).map(id=>{
  const entry=config.value.programs.find(p=>p.id===id)
- return {id,label:entry?.label?.[language.value]||localized(programLabels[id],language.value),description:typeof entry?.description?.[language.value]==='string'?entry.description[language.value]:localized(programDescriptions[id],language.value)}
+ return {id,label:entry?.label?.[language.value]||localized((dryFog.value?dryFogLabels:programLabels)[id],language.value),description:typeof entry?.description?.[language.value]==='string'?entry.description[language.value]:localized((dryFog.value?dryFogDescriptions:programDescriptions)[id],language.value)}
 }))
-const mainPrograms=computed(()=>programs.value.filter(p=>!['air','vacuum'].includes(p.id)))
+const mainPrograms=computed(()=>programs.value.filter(p=>!(dryFog.value?dryFogAdditional:['air','vacuum']).includes(p.id)))
 const activeProgram=computed(()=>programs.value.find(p=>p.id===selected.value))
-const activeTone=computed(()=>design.value==='cards'?({water:'#008dce',foam:'#db0062',wax:'#a96a00',chem:'#268237',osmos:'#0087ad',nano:'#7441ce',air:'#008caa',vacuum:'#5865c9'}[selected.value]||'#008dce'):(appearance.value==='light'?lightTones:darkActiveTones)[selected.value]||'#39c7ef')
+const activeTone=computed(()=>dryFog.value?dryFogTones[selected.value]||'#008dce':design.value==='cards'?({water:'#008dce',foam:'#db0062',wax:'#a96a00',chem:'#268237',osmos:'#0087ad',nano:'#7441ce',air:'#008caa',vacuum:'#5865c9'}[selected.value]||'#008dce'):(appearance.value==='light'?lightTones:darkActiveTones)[selected.value]||'#39c7ef')
 const cardStatusKind=computed(()=>!fresh.value||!ready.value?'fault':pauseVisual.value!=='none'?pauseVisual.value:running.value?'running':activeProgram.value?'waiting':'idle')
 const cardStatusTitle=computed(()=>{
  if(cardStatusKind.value==='fault')return ''
@@ -105,8 +107,8 @@ const cardStatusNote=computed(()=>{
 })
 const wheelStatusTone=computed(()=>activeProgram.value&&ready.value?activeTone.value:appearance.value==='light'?'#c6d9e6':'#263e50')
 const wheelStatusInk=computed(()=>readableInk(wheelStatusTone.value,appearance.value))
-const statusPhoto=computed(()=>modePhoto(selected.value||'nano'))
-const optionalPrograms=computed(()=>programs.value.filter(p=>['air','vacuum'].includes(p.id)))
+const statusPhoto=computed(()=>modePhoto(selected.value||(dryFog.value?'aroma_1':'nano')))
+const optionalPrograms=computed(()=>programs.value.filter(p=>(dryFog.value?dryFogAdditional:['air','vacuum']).includes(p.id)))
 const centerLabel=computed(()=>!selected.value?t.value.choose:manualPause.value?t.value.resume:t.value.pause)
 const centerSub=computed(()=>state.value?.resumeRequiresTriggerReset?t.value.release:pauseVisual.value==='free'?t.value.freePause:pauseVisual.value==='paid'?t.value.paidPause:pauseVisual.value==='stopped'?t.value.noCharge:!selected.value?'':manualPause.value?'':t.value.pauseSub)
 const cardCenterSub=computed(()=>{if(state.value?.resumeRequiresTriggerReset)return t.value.release;if(pauseVisual.value==='free')return t.value.freePause+' · '+time.value;if(pauseVisual.value==='paid'){if(isVip.value)return t.value.vipPauseCharging;const p=parameters.value?.paidPause;return t.value.paidPause+(p?.amountSum>=0&&p?.durationSeconds>0?' · '+Number(p.amountSum).toLocaleString('ru-RU')+' so‘m / '+p.durationSeconds+' s':'')}return centerSub.value})
@@ -124,9 +126,9 @@ watch(idleVisible, v=>{if(v)language.value=defaultLanguage(config.value)})
 </script>
 <template>
  <div class="wash-kiosk" :data-theme="appearance" :data-design="design">
- <details v-if="preview" class="preview-tools"><summary>DEMO · Настройки</summary><p>Тестовые данные · без оборудования</p><label>Состояние<select aria-label="Состояние" @change="runtime.scenario($event.target.value)"><option value="balance">Баланс 25 000</option><option value="active">Активная мойка</option><option value="free">Бесплатная пауза</option><option value="paid">Платная пауза</option><option value="empty">Нулевой баланс</option><option value="vip">VIP-допуск</option><option value="pending">Незавершённый перевод</option><option value="held">Наличные во время VIP</option></select></label><label>Дизайн<select aria-label="Дизайн" v-model="config.theme.design"><option value="wheel">Круговой</option><option value="cards">Карточки</option></select></label><label>Вид<select aria-label="Вид" v-model="config.theme.appearance.manualTheme"><option value="dark">Dark</option><option value="light">Light</option></select></label><label v-for="id in ['air','vacuum']" :key="id"><input v-model="config.programs.find(p=>p.id===id).visible" type="checkbox"/>{{ id==='air'?'HAVO':'PLISOS' }}</label><button @click="runtime.addCredit(5000)">Тест: +5 000 so‘m</button></details>
+ <details v-if="preview" class="preview-tools"><summary>DEMO · Настройки</summary><p>Тестовые данные · без оборудования</p><label>Состояние<select aria-label="Состояние" @change="runtime.scenario($event.target.value)"><option value="balance">Баланс 25 000</option><option value="active">Активная мойка</option><option value="free">Бесплатная пауза</option><option value="paid">Платная пауза</option><option value="empty">Нулевой баланс</option><option value="vip">VIP-допуск</option><option value="pending">Незавершённый перевод</option><option value="held">Наличные во время VIP</option></select></label><label v-if="!dryFog">Дизайн<select aria-label="Дизайн" v-model="config.theme.design"><option value="wheel">Круговой</option><option value="cards">Карточки</option></select></label><label>Вид<select aria-label="Вид" v-model="config.theme.appearance.manualTheme"><option value="dark">Dark</option><option value="light">Light</option></select></label><label v-for="id in (dryFog?dryFogAdditional:['air','vacuum'])" :key="id"><input v-model="config.programs.find(p=>p.id===id).visible" type="checkbox"/>{{dryFog?dryFogLabels[id][0]:id==='air'?'HAVO':'PLISOS'}}</label><button @click="runtime.addCredit(5000)">Тест: +5 000 so‘m</button></details>
  <IdleScreen v-if="idleVisible" :config="config" v-model:language="language" @wake="wake"/>
- <main v-else :aria-busy="busy" class="wash-screen" :class="{'without-optional':!optionalPrograms.length,'cards-design':design==='cards'}" :lang="{uz:'uz',kz:'kk',ky:'ky',ru:'ru'}[language]">
+ <main v-else :aria-busy="busy" class="wash-screen" :class="{'without-optional':!optionalPrograms.length,'cards-design':design==='cards','dry-fog-design':dryFog}" :lang="{uz:'uz',kz:'kk',ky:'ky',ru:'ru'}[language]">
   <header class="wash-topbar">
    <div class="wash-brand" role="button" tabindex="0" :aria-label="t.admin" @pointerdown="startLoginHold" @pointerup="cancelLoginHold" @pointercancel="cancelLoginHold" @pointerleave="cancelLoginHold" @pointermove="moveLoginHold" @contextmenu.prevent @keydown.enter.prevent="startLoginHold" @keyup.enter="cancelLoginHold" @blur="cancelLoginHold"><img v-if="design==='cards' && brandTitle(config).toUpperCase()==='LABRIX WASH'" class="theme2-brand-mark" src="/assets/theme2/brand/labrix_mark_L.png" alt=""/><img v-else-if="config?.brand?.logoUrl" class="wash-owner-logo" :src="config.brand.logoUrl" alt=""/><img v-else-if="design==='cards'" class="theme2-brand-mark" src="/assets/theme2/brand/labrix_mark_L.png" alt=""/><WashIcon v-else name="water"/><div><strong v-if="brandTitle(config)==='LABRIX WASH'">LABRIX <span>WASH</span></strong><strong v-else class="custom-brand">{{brandTitle(config)}}</strong><small>{{ brandSubtitle(config,t.descriptor) }}</small></div></div>
    <nav v-if="config?.layout?.showLanguageButtons!==false" aria-label="Language"><button v-for="lang in ['ru','uz','kz','ky']" :key="lang" :aria-label="languageNames[lang]" :aria-pressed="language===lang" :class="{active:language===lang}" @click="language=lang">{{ lang.toUpperCase() }}</button></nav>
@@ -146,13 +148,13 @@ watch(idleVisible, v=>{if(v)language.value=defaultLanguage(config.value)})
 
    <div class="status-secondary"><span>{{ timePrimary?t.balance:timerLabel }}</span><div><WashIcon :name="timePrimary?'coins':'clock'"/><strong>{{ timePrimary?balance:time }}</strong><small v-if="timePrimary&&!isVip">so‘m</small></div>   <p v-if="timePrimary&&!isVip&&fresh&&state?.bonusSum>0" class="bonus-caption">{{ language==='ru'?'Включая бонус':language==='kz'?'Бонус қоса есептелген':language==='ky'?'Бонус кошулган':'Shu jumladan bonus' }} {{ Number(state.bonusSum).toLocaleString('ru-RU') }} so‘m</p></div>
   </section>
-  <ProgramCards v-if="design==='cards'" :programs="mainPrograms" :selected="selected" :active="running" :disabled="!ready" :t="t" :language="language" :pause-state="pauseVisual" :center-label="!selected&&!(credit>0)?t.addMoney:centerLabel" :center-sub="cardCenterSub" :center-icon="!selected?(credit>0?'water':'wallet'):manualPause?'play':'pause'" :center-disabled="centerDisabled" @select="choose" @center="center"/>
+  <ProgramCards v-if="design==='cards'" :programs="mainPrograms" :selected="selected" :active="running" :disabled="!ready" :t="t" :heading="dryFog?t.aromaHeading:undefined" :language="language" :pause-state="pauseVisual" :center-label="!selected&&!(credit>0)?t.addMoney:centerLabel" :center-sub="cardCenterSub" :center-icon="!selected?(credit>0?'water':'wallet'):manualPause?'play':'pause'" :center-disabled="centerDisabled" @select="choose" @center="center"/>
   <section v-else class="wash-wheel-area">
    <ProgramWheel :running-label="t.runningBadge" :theme="appearance" :programs="mainPrograms" :selected="selected" :active="running" :pause-state="pauseVisual" :disabled="!ready" :center-label="centerLabel" :center-sub="centerSub" :center-icon="manualPause||!selected?'play':'pause'" :center-disabled="centerDisabled" @select="choose" @center="center"/>
   </section>
   <section v-if="optionalPrograms.length" class="wash-optional">
    <h2>{{ t.optional }}</h2>
-   <div><button v-for="p in optionalPrograms" :key="p.id" :class="{selected:selected===p.id,running:running&&selected===p.id}" :style="{'--optional-tone':(appearance==='light'?lightTones:darkActiveTones)[p.id],'--optional-ink':programInk(appearance,p.id)}" :aria-label="p.label" :aria-pressed="selected===p.id" :disabled="!ready" @click="choose(p.id)"><img v-if="design==='cards'" class="mode-photo" :src="modePhoto(p.id)" alt="" decoding="async"/><WashIcon :name="p.id"/><span><strong :class="{'long-name':p.label.length>10}">{{ p.label }}</strong><small>{{ design==='cards' && selected===p.id ? (running?t.running:t.trigger) : p.description }}</small></span><b v-if="design!=='cards'" aria-hidden="true">{{selected===p.id?'✓':'+'}}</b><span v-else-if="running&&selected===p.id" class="mode-running-dot" aria-hidden="true"></span></button></div>
+   <div><button v-for="p in optionalPrograms" :key="p.id" :class="{selected:selected===p.id,running:running&&selected===p.id}" :style="{'--optional-tone':(dryFog?dryFogTones:appearance==='light'?lightTones:darkActiveTones)[p.id],'--optional-ink':programInk(appearance,p.id)}" :aria-label="p.label" :aria-pressed="selected===p.id" :disabled="!ready" @click="choose(p.id)"><img v-if="design==='cards'" class="mode-photo" :src="modePhoto(p.id)" alt="" decoding="async"/><WashIcon :name="p.id"/><span><strong :class="{'long-name':p.label.length>10}">{{ p.label }}</strong><small>{{ design==='cards' && selected===p.id ? (running?t.running:t.trigger) : p.description }}</small></span><b v-if="design!=='cards'" aria-hidden="true">{{selected===p.id?'✓':'+'}}</b><span v-else-if="running&&selected===p.id" class="mode-running-dot" aria-hidden="true"></span></button></div>
   </section>
   <button class="wash-topup" :aria-label="t.topup" :class="{emphasized:credit===0||paymentPending}" :disabled="!ready&&!paymentPending" @click="paymentOpen=true"><span><WashIcon name="wallet"/><span class="topup-title"><strong>{{design==='cards'&&!(credit>0)?t.readyToWash:t.topup}}</strong><small v-if="design==='cards'&&!(credit>0)">{{t.choosePayment}}</small></span><b aria-hidden="true">+</b></span><span class="topup-methods"><span><WashIcon name="cash"/>{{ t.cash }}</span><span><WashIcon name="qr"/>QR</span><span><WashIcon name="card"/>{{ t.card }}</span></span></button>
   <WashFooter :preview="preview" :contacts="config?.contacts" :station="station" :t="t" @open="socialOpen=$event"/>

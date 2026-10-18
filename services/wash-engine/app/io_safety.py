@@ -4,8 +4,9 @@ from datetime import datetime,UTC
 
 OUTPUTS=('water','osmos','nano','foam','wax','chem','vacuum','air')
 
-def validate_io(io,last_output=None):
+def validate_io(io,last_output=None,device_type="wash"):
     if not isinstance(io,dict):raise RuntimeError('Invalid I/O response')
+    if io.get('device_type','wash')!=device_type:raise RuntimeError('Hardware device profile mismatch')
     # Legacy list-shaped responses remain supported; native Radxa proof is strict.
     if not isinstance(io.get('inputs'),dict):
         if io.get('modbus_ok') is False:raise RuntimeError('Modbus is unavailable')
