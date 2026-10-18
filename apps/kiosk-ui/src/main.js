@@ -16,7 +16,7 @@ if (['/', '/wash', '/preview/idle'].includes(location.pathname)) {
 }
 
 if (['/', '/wash', '/preview/wash', '/preview/dry-fog'].includes(location.pathname)) {
-  document.title = location.pathname==='/preview/dry-fog'?'LABRIX DRY FOG':'LABRIX WASH'
+  document.title = location.pathname==='/preview/dry-fog'?'LABRIX AROMA':'LABRIX WASH'
   document.documentElement.classList.add('customer-kiosk')
 }
 

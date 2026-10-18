@@ -19,9 +19,16 @@ const paths = {
  coins:'M8 15c0-13 48-13 48 0s-48 13-48 0Z M8 15v13c0 13 48 13 48 0V15 M8 29v13c0 13 48 13 48 0V29 M8 43v9c0 13 48 13 48 0v-9',
  close:'M15 15 49 49 M49 15 15 49',phone:'m15 5 12 15-8 8q5 12 17 17l8-8 15 12q-3 12-13 10C24 52 12 40 5 18 3 8 15 5 15 5Z'
 }
-const scent='M24 10h16v9H24Z M20 22h24l5 33H15Z M32 2v5 M48 8l5-4 M51 18h8'
-for(const id of ['aroma_1','aroma_2','aroma_3','aroma_4','aroma_5'])paths[id]=scent
-paths.blackening='M32 5a20 27 0 1 0 0 54a20 27 0 0 0 0-54 M32 14a11 18 0 1 0 0 36a11 18 0 0 0 0-36 M12 15l8 4 M9 30h9 M12 45l8-4 M44 15l8 4 M46 30h9 M44 45l8-4'
-paths.tank_air='M26 5a17 26 0 1 0 0 52a17 26 0 0 0 0-52 M26 15a8 16 0 1 0 0 32a8 16 0 0 0 0-32 M36 35h13v13h11 M49 35V23h10'
+// One stroke system, distinct silhouettes; symbols identify fragrances without
+// claiming their ingredients. Customer labels remain the accessible names.
+Object.assign(paths,{
+ aroma_1:'M10 20l10 8L32 12l12 16 10-8-5 27H15Z M17 54h30 M23 39h18',
+ aroma_2:'M32 6v52 M9 19l46 26 M9 45l46-26 M25 12l7 7 7-7 M25 52l7-7 7 7 M10 28l10-3-2-10 M54 36l-10 3 2 10 M18 49l2-10-10-3 M46 15l-2 10 10 3',
+ aroma_3:'M32 32C12 23 13 8 24 10c6 1 8 10 8 22Z M32 32C30 10 43 3 49 12c4 6-3 14-17 20Z M32 32c20-9 32 1 25 11-5 6-15 2-25-11Z M32 32c15 16 9 31-2 27-7-2-7-13 2-27Z M32 32C22 51 6 50 7 38c1-8 12-10 25-6Z',
+ aroma_4:'M32 5l21 8v17c0 14-9 23-21 29C20 53 11 44 11 30V13Z M22 32l7 7 14-17',
+ aroma_5:'M12 48C3 25 20 9 53 9c1 31-14 49-35 42 M13 55l28-31 M24 43V29 M24 43h14',
+ blackening:'M27 8a18 24 0 1 0 0 48a18 24 0 0 0 0-48 M27 17a9 15 0 1 0 0 30a9 15 0 0 0 0-30 M12 19l7 4 M9 32h9 M12 45l7-4 M48 6l3 8 8 3-8 3-3 8-3-8-8-3 8-3Z',
+ tank_air:'M23 8a16 24 0 1 0 0 48a16 24 0 0 0 0-48 M23 17a7 15 0 1 0 0 30a7 15 0 0 0 0-30 M39 40h8v12h10 M45 7h14v21H45Z M52 23v-8 M48 15l4-4 4 4'
+})
 </script>
 <template><svg :data-icon="name" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><template v-if="name==='pause'"><rect x="18" y="13" width="10" height="38" rx="3" fill="currentColor" stroke="none"/><rect x="36" y="13" width="10" height="38" rx="3" fill="currentColor" stroke="none"/></template><path v-else-if="name==='play'" d="M24 13 51 30a2.4 2.4 0 0 1 0 4L24 51a2.4 2.4 0 0 1-4-2V15a2.4 2.4 0 0 1 4-2Z" fill="currentColor" stroke="none"/><rect v-else-if="name==='stop'" x="15" y="15" width="34" height="34" rx="4" fill="currentColor" stroke="none"/><path v-else :d="paths[name] || paths.water" /></svg></template>
