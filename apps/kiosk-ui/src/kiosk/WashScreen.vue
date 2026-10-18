@@ -76,7 +76,7 @@ const isVip=computed(()=>state.value?.activeSessionSource==='vip')
 const balance=computed(()=>isVip.value?'VIP':fresh.value&&Number.isFinite(credit.value)?credit.value.toLocaleString('ru-RU'):'—')
 const programs=computed(()=>['foam','wax','osmos','nano','chem','water','air','vacuum'].filter(id=>parameters.value?.tariffs?.[id]?.enabled===true&&config.value?.programs?.some(p=>p.id===id&&p.visible!==false)).map(id=>{
  const entry=config.value.programs.find(p=>p.id===id)
- return {id,label:entry?.label?.[language.value]||localized(programLabels[id],language.value),description:localized(programDescriptions[id],language.value)}
+ return {id,label:entry?.label?.[language.value]||localized(programLabels[id],language.value),description:typeof entry?.description?.[language.value]==='string'?entry.description[language.value]:localized(programDescriptions[id],language.value)}
 }))
 const mainPrograms=computed(()=>programs.value.filter(p=>!['air','vacuum'].includes(p.id)))
 const activeProgram=computed(()=>programs.value.find(p=>p.id===selected.value))

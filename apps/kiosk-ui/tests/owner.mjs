@@ -18,6 +18,7 @@ try {
  await page.route('**/api/**',async route=>{
   const req=route.request(),url=new URL(req.url()),path=url.pathname;let data={ok:true};
   if(path==='/api/auth/me')data=user;
+  else if(path==='/api/owner/operator/settings')data={ok:true,settings:{enabled:false,phone:'',chat_id:''}};
   else if(path==='/api/owner/wallet')data={configuration:wallet,role:'primary',pending_count:0};
   else if(path==='/api/owner/wallet/diagnostics')data={ok:true,state:'in-sync',checked_at:'2026-10-10T12:00:00Z',nodes:[1,7].map(post=>({post,online:true,proof:{generation:1,operation_count:3,pending_count:0,journal_digest:'a'.repeat(64),state_digest:'b'.repeat(64)}}))};
   else if(path==='/api/owner/wallet/customers'){if(req.method()==='POST'){const body=req.postDataJSON();assert.equal(body.expected_revision,3);assert(!('balance_sum' in body));customer={...customer,...body,revision:4};}data={ok:true,cards:[customer],next_after:null,can_edit:true};}
@@ -67,8 +68,10 @@ try {
  await page.screenshot({path:'../../docs/ui-owner-vip-migration.png',fullPage:true});
  await page.getByRole('button',{name:'Экран мойки',exact:true}).tap();await page.getByLabel('Название',{exact:true}).fill('Labrix');
  await page.getByRole('button',{name:'Telegram',exact:true}).tap();await page.getByRole('alertdialog').waitFor();await page.getByRole('button',{name:'Остаться',exact:true}).tap();
- await page.getByRole('button',{name:'Готово ✓',exact:true}).tap();await page.getByRole('button',{name:'Сохранить',exact:true}).tap();await page.getByRole('status').filter({hasText:'Сохранено'}).waitFor();assert.equal(savedConfig.brand.name,'Labrix');assert.deepEqual(savedConfig.programs,config.config.programs);
+ await page.getByRole('button',{name:'Готово ✓',exact:true}).tap();await page.getByRole('button',{name:'Сохранить',exact:true}).tap();await page.getByRole('status').filter({hasText:'Сохранено'}).waitFor();assert.equal(savedConfig.brand.name,'Labrix');assert.deepEqual(savedConfig.programs.map(({description,...p})=>p),config.config.programs.map(({description,...p})=>p));
  await page.getByLabel('Дизайн экрана',{exact:true}).selectOption('cards');await page.getByRole('button',{name:'Сохранить',exact:true}).tap();await page.getByRole('status').filter({hasText:'Сохранено'}).waitFor();assert.equal(savedConfig.theme.design,'cards');
+ await page.getByRole('button',{name:'Программы',exact:true}).tap();const subtitle=page.getByLabel('Подзаголовок · RU',{exact:true}).first();await subtitle.fill('Проверенное описание');await page.getByRole('button',{name:'Готово ✓',exact:true}).tap();await page.getByRole('button',{name:'Сохранить',exact:true}).tap();await page.getByRole('status').filter({hasText:'Сохранено'}).waitFor();assert.equal(savedConfig.programs[0].description.ru,'Проверенное описание');await page.getByRole('button',{name:'Бренд и оформление',exact:true}).tap();
+
  await page.getByLabel('Вид экрана поста',{exact:true}).selectOption('light');await page.getByRole('status').filter({hasText:'Вид экрана поста применён'}).waitFor();assert.equal(savedConfig.theme.appearance.mode,'manual');assert.equal(savedConfig.theme.appearance.manualTheme,'light');
  assert.equal(await page.getByLabel('Светлая тема с HH',{exact:true}).count(),0);
  await page.reload();await page.getByLabel('Вид экрана поста',{exact:true}).waitFor();assert.equal(await page.getByLabel('Вид экрана поста',{exact:true}).inputValue(),'light');assert.equal(await page.getByLabel('Дизайн экрана',{exact:true}).inputValue(),'cards');
