@@ -1,0 +1,32 @@
+/* Wheel status: dark data surface blending into the current mode color. */
+.wash-kiosk[data-design=wheel] .wheel-status{position:relative;isolation:isolate;overflow:hidden;display:grid;grid-template-columns:1.12fr 1fr;grid-template-rows:1fr 1fr;column-gap:calc(34 * var(--u));padding:calc(26 * var(--u));border-radius:calc(24 * var(--u));text-align:left;background:var(--status-tone);box-shadow:none;color:#f4f8fc}
+.wash-kiosk[data-design=wheel] .wheel-status::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:linear-gradient(90deg,#061522ff 0%,#061522f5 20%,#061522d6 35%,#06152280 50%,#06152233 65%,#0615220a 82%,#06152200 100%)}
+.wash-kiosk[data-design=wheel] .wheel-status .status-primary{grid-column:1;grid-row:1;min-width:0;justify-content:center}
+.wash-kiosk[data-design=wheel] .wheel-status .status-label{font-size:calc(26 * var(--u));color:#d7e7f3}
+.wash-kiosk[data-design=wheel] .wheel-status .status-value{justify-content:flex-start;gap:calc(12 * var(--u));color:#fff}
+.wash-kiosk[data-design=wheel] .wheel-status .status-value strong{font-size:calc(86 * var(--u));letter-spacing:-.045em}
+.wash-kiosk[data-design=wheel] .wheel-status.time-primary .status-value strong{font-size:calc(108 * var(--u))}
+.wash-kiosk[data-design=wheel] .wheel-status .status-value>svg{width:calc(48 * var(--u));height:calc(48 * var(--u));color:#7bdaff}
+.wash-kiosk[data-design=wheel] .wheel-status .currency{font-size:calc(25 * var(--u));color:#f4f8fc}
+.wash-kiosk[data-design=wheel] .wheel-status .status-secondary{grid-column:1;grid-row:2;min-width:0;align-items:flex-start;background:none;border:0;border-radius:0;color:#fff}
+.wash-kiosk[data-design=wheel] .wheel-status .status-secondary>span{font-size:calc(24 * var(--u));color:#d7e7f3}
+.wash-kiosk[data-design=wheel] .wheel-status .status-secondary>div{justify-content:flex-start;gap:calc(12 * var(--u))}
+.wash-kiosk[data-design=wheel] .wheel-status .status-secondary svg{color:#7bdaff;width:calc(40 * var(--u));height:calc(40 * var(--u))}
+.wash-kiosk[data-design=wheel] .wheel-status .status-secondary strong{font-size:calc(52 * var(--u))}
+.wash-kiosk[data-design=wheel] .wheel-status .status-secondary small{font-size:calc(25 * var(--u))}
+.wash-kiosk[data-design=wheel] .wheel-status .wash-status-hint{grid-column:2;grid-row:1 / 3;align-self:stretch;display:flex;flex-direction:column;justify-content:center;align-items:flex-start;gap:calc(14 * var(--u));padding-left:calc(24 * var(--u));margin:0;min-width:0;background:none;border:0;border-radius:0;color:var(--status-ink);line-height:1.3;text-align:left}
+.wash-kiosk[data-design=wheel] .wheel-status .wash-status-hint>svg{width:calc(58 * var(--u));height:calc(58 * var(--u));color:var(--status-ink)}
+.wash-kiosk[data-design=wheel] .wheel-status .wash-status-hint>strong{font-size:calc(40 * var(--u));line-height:1.1;color:var(--status-ink);overflow-wrap:anywhere}
+.wash-kiosk[data-design=wheel] .wheel-status-note{font-size:calc(26 * var(--u));overflow-wrap:anywhere}
+.wash-kiosk[data-design=wheel] .wheel-status .bonus-caption{text-align:left;color:#d7e7f3;font-size:calc(19 * var(--u))}
+.wash-kiosk[data-design=wheel] .wheel-status .wash-status-hint.fault{color:var(--status-ink)}
+.wash-kiosk[data-design=wheel] .wheel-status:is(.pause-free,.pause-paid) .status-primary .status-label{color:#ffda96}
+/* Daylight uses a light scrim and dark numerals, not night-mode dimming. */
+.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status{color:#0b2338}
+.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status::before{background:linear-gradient(90deg,#f8fbffff 0%,#f8fbfff5 20%,#f8fbffd6 35%,#f8fbff80 50%,#f8fbff33 65%,#f8fbff0a 82%,#f8fbff00 100%)}
+.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status .status-primary,.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status .status-secondary,.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status .status-value,.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status .currency{color:#0b2338}
+.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status .status-label,.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status .status-secondary>span,.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status .bonus-caption{color:#355571}
+.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status .status-value>svg,.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status .status-secondary svg{color:#007eb8}
+.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status:is(.pause-free,.pause-paid) .status-primary .status-label{color:#7a4b08}
+
+.wash-kiosk[data-design=wheel][data-theme=light] .wheel-status .wash-status-hint>strong{font-size:calc(54 * var(--u));font-weight:800;line-height:1.08}

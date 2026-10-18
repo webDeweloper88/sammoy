@@ -1,0 +1,14 @@
+[Unit]
+Description=LABRIX initialize fresh application on cloned card
+After=docker.service sammoy2-factory-identity.service sammoy2-pn532-i2c.service
+Requires=docker.service sammoy2-factory-identity.service
+ConditionPathExists=/var/lib/sammoy2/factory-pending
+
+[Service]
+Type=oneshot
+ExecStart=/opt/sammoy/sammoy2/deploy/golden/start-clone.sh
+TimeoutStartSec=240
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,67 @@
+/dts-v1/;
+
+/ {
+
+	metadata {
+		title = "Enable TWI7";
+		compatible = "radxa,cubie-a7a\0radxa,cubie-a7z\0radxa,cubie-a7s";
+		category = "misc";
+		exclusive = "twi7\0PJ22\0PJ23";
+		description = "Enable TWI7.\nOn Radxa Cubie A7A this is SDA pin 3 & SCL pin 5.\nOn Radxa Cubie A7Z this is SDA pin 3 & SCL pin 5.\nOn Radxa Cubie A7S this is SDA pin 3 & SCL pin 5.\n";
+	};
+
+	fragment@0 {
+		target = <0xffffffff>;
+
+		__overlay__ {
+
+			twi7@0 {
+				pins = "PJ22\0PJ23";
+				function = "twi7";
+				drive-strength = <0x0a>;
+				bias-pull-up;
+				phandle = <0x01>;
+			};
+
+			twi7@1 {
+				pins = "PJ22\0PJ23";
+				function = "gpio_in";
+				phandle = <0x02>;
+			};
+		};
+	};
+
+	fragment@1 {
+		target = <0xffffffff>;
+
+		__overlay__ {
+			clock-frequency = <0x186a0>;
+			pinctrl-0 = <0x01>;
+			pinctrl-1 = <0x02>;
+			pinctrl-names = "default\0sleep";
+			twi_drv_used = <0x01>;
+			status = "okay";
+		};
+	};
+
+	__symbols__ {
+		twi7_pins_default = "/fragment@0/__overlay__/twi7@0";
+		twi7_pins_sleep = "/fragment@0/__overlay__/twi7@1";
+	};
+
+	__fixups__ {
+		pio = "/fragment@0:target:0";
+		twi7 = "/fragment@1:target:0";
+	};
+
+	__local_fixups__ {
+
+		fragment@1 {
+
+			__overlay__ {
+				pinctrl-0 = <0x00>;
+				pinctrl-1 = <0x00>;
+			};
+		};
+	};
+};

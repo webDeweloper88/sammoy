@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { api, changePassword, getParameters, login, me, saveParameters } from './api'
 import TouchKeyboard from './TouchKeyboard.vue'
 import OwnerPages from './OwnerPages.vue'
+import WalletSettings from './WalletSettings.vue'
 import AdminPages from './AdminPages.vue'
 const theme = ref(localStorage.getItem('sammoy-ui-theme') === 'dark' ? 'dark' : 'light')
 function applyTheme() { document.documentElement.dataset.theme = theme.value; localStorage.setItem('sammoy-ui-theme', theme.value) }
@@ -12,11 +13,11 @@ const page = ref('parameters')
 const account = ref(null)
 const pageDirty = ref(false)
 const pendingPage = ref('')
-const navLabels = { ru: ['Параметры', 'Отчёты', 'VIP и карты', 'Экран мойки', 'Telegram', 'Учётная запись'], uz: ['Sozlamalar', 'Hisobotlar', 'VIP va kartalar', 'Yuvish ekrani', 'Telegram', 'Hisob'], en: ['Settings', 'Reports', 'VIP & cards', 'Wash screen', 'Telegram', 'Account'] }
-const pageKeys = ['parameters', 'reports', 'cards', 'kiosk-settings', 'telegram', 'account']
-const adminKeys = ['diagnostics', 'connections', 'maintenance']
-const visiblePages = computed(() => account.value?.role === 'admin' ? [...adminKeys, ...pageKeys.filter(p => p !== 'reports')] : pageKeys)
-const adminLabels = {ru:['Диагностика','Подключение','Обслуживание'],uz:['Diagnostika','Ulanish','Xizmat'],en:['Diagnostics','Connection','Maintenance']}
+const navLabels = { ru: ['Параметры', 'Отчёты', 'VIP и карты', 'Экран мойки', 'Telegram', 'Кошелёк', 'Учётная запись'], uz: ['Sozlamalar', 'Hisobotlar', 'VIP va kartalar', 'Yuvish ekrani', 'Telegram', 'Hamyon', 'Hisob'], en: ['Settings', 'Reports', 'VIP & cards', 'Wash screen', 'Telegram', 'Wallet', 'Account'] }
+const pageKeys = ['parameters', 'reports', 'cards', 'kiosk-settings', 'telegram', 'wallet', 'account']
+const adminKeys = ['diagnostics', 'connections', 'license', 'click', 'maintenance']
+const visiblePages = computed(() => account.value?.role === 'admin' ? [...adminKeys, 'account'] : pageKeys)
+const adminLabels = {ru:['Диагностика','Подключение','Лицензия','Click','Обслуживание'],uz:['Diagnostika','Ulanish','Litsenziya','Click','Xizmat'],en:['Diagnostics','Connection','License','Click','Maintenance']}
 const pageLabel = key => adminKeys.includes(key) ? adminLabels[language.value][adminKeys.indexOf(key)] : navLabels[language.value][pageKeys.indexOf(key)]
 const routeFor = key => '/' + (account.value?.role === 'admin' ? 'admin' : 'owner') + '/' + key
 function enterPage() { const requested = location.pathname.split('/').pop(); page.value = visiblePages.value.includes(requested) ? requested : account.value?.role === 'admin' ? 'diagnostics' : 'parameters'; window.history.replaceState(null, '', routeFor(page.value)); if(page.value === 'parameters') return load() }
@@ -183,6 +184,7 @@ function markDirty() { dirty.value = true; notice.value = '' }
 const valid = computed(() => {
   const p = parameters.value
   if (!p) return false
+  if(p.topUpBonus && (!Number.isInteger(p.topUpBonus.percent)||p.topUpBonus.percent<0||p.topUpBonus.percent>100))return false
   if (![p.freePauseSeconds, p.triggerGraceSeconds, p.triggerResetConfirmSeconds, p.powerRecoverySeconds].every(v => validNumber(v))) return false
   if (!validNumber(p.paidPause?.amountSum) || !validNumber(p.paidPause?.durationSeconds, 1)) return false
   return modes.every(mode => validNumber(p.tariffs?.[mode]?.amountSum) && validNumber(p.tariffs?.[mode]?.durationSeconds, 1))
@@ -266,10 +268,12 @@ onMounted(async () => {
 
     <div v-else-if="loading && !parameters" class="card loading">{{ t('loading') }}</div>
     <AdminPages v-else-if="account?.role === 'admin' && adminKeys.includes(page)" :key="page" :page="page" :token="token" :language="language" @dirty="pageDirty = $event" />
-    <OwnerPages v-else-if="page !== 'parameters'" :key="page" :page="page" :token="token" :language="language" :account="account" @dirty="pageDirty = $event" @account="updateAccount" />
+    <WalletSettings v-else-if="account?.role==='owner' && page==='wallet'" :token="token" @dirty="pageDirty=$event" :language="language"/>
+      <OwnerPages v-else-if="page !== 'parameters'" :key="page" :page="page" :token="token" :language="language" :account="account" @dirty="pageDirty = $event" @account="updateAccount" />
     <template v-else-if="parameters">
       <div class="toolbar"><p :class="{ 'unsaved': dirty }">{{ t(dirty ? 'unsaved' : 'noChange') }}</p><div><button class="quiet" :disabled="loading || saving" @click="navigate('parameters')">{{ t('refresh') }}</button><button class="primary" :disabled="!valid || !dirty || saving" @click="save">{{ saving ? t('saving') : t('save') }}</button></div></div>
       <form @submit.prevent="save" @input="markDirty" @change="markDirty">
+        <section class="card"><div class="card-head"><h2>{{ language==='ru'?'Бонус за пополнение':language==='uz'?'Balans to‘ldirish bonusi':'Top-up bonus' }}</h2></div><div class="content fields" v-if="parameters.topUpBonus"><label class="show-password"><input v-model="parameters.topUpBonus.enabled" type="checkbox"/>{{ language==='ru'?'Начислять бонус':language==='uz'?'Bonus hisoblash':'Award bonus' }}</label><label>{{ language==='ru'?'Бонус, %':language==='uz'?'Bonus, %':'Bonus, %' }}<input v-model.number="parameters.topUpBonus.percent" type="number" min="0" max="100" step="1" required/></label><p>{{ language==='ru'?'Только новые пополнения наличными и Click на этом посту. Перенос на карту не начисляет бонус повторно. Сначала расходуется бонус.':language==='uz'?'Faqat ushbu postdagi yangi naqd va Click to‘lovlari uchun. Kartaga ko‘chirishda bonus qayta hisoblanmaydi. Avval bonus sarflanadi.':'Only new cash and Click top-ups at this station. Card transfers never award another bonus. Bonus is spent first.' }}</p><p v-if="parameters.topUpBonus.enabled">50 000 + {{ (50000*parameters.topUpBonus.percent/100).toLocaleString('ru-RU') }} = <strong>{{ (50000+50000*parameters.topUpBonus.percent/100).toLocaleString('ru-RU') }} so‘m</strong></p></div></section>
         <section class="card"><div class="card-head"><h2>{{ t('tariffs') }}</h2></div>
           <div class="table-wrap"><table><thead><tr><th>{{ t('tariffs') }}</th><th>{{ t('amount') }}</th><th>{{ t('duration') }}</th><th>{{ t('rate') }}</th><th>{{ t('enabled') }}</th></tr></thead><tbody>
             <tr v-for="mode in modes" :key="mode"><th>{{ t(mode) }}</th><td><input v-model.number="parameters.tariffs[mode].amountSum" :aria-label="`${t(mode)} — ${t('amount')}`" type="number" min="0" step="1" /></td><td><input v-model.number="parameters.tariffs[mode].durationSeconds" :aria-label="`${t(mode)} — ${t('duration')}`" type="number" min="1" step="1" /></td><td class="rate">{{ rate(parameters.tariffs[mode]) }}</td><td><label class="table-toggle"><input v-model="parameters.tariffs[mode].enabled" type="checkbox" :aria-label="`${t(mode)} — ${t('enabled')}`" /></label></td></tr>

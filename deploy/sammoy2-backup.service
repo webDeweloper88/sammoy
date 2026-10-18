@@ -1,0 +1,12 @@
+[Unit]
+Description=SAMMOY2 idle backup and disposable restore verification
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/sammoy/sammoy2
+ExecStart=/usr/bin/python3 /opt/sammoy/sammoy2/deploy/maintenance/backup.py scheduled /var/backups/sammoy2
+SuccessExitStatus=75
+TimeoutStartSec=15min
+UMask=0077

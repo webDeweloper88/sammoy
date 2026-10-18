@@ -1,0 +1,73 @@
+# Bench profile: only the real RS485 relay board; no simulated peripherals.
+rfid:
+  enabled: false
+  bus: 7
+  address: 36
+  events_max: 100
+  poll_timeout_seconds: 0.25
+  release_timeout_seconds: 0.75
+transport:
+  type: modbus-rtu
+  device: /dev/ttyUSB0
+  baud_rate: 9600
+  data_bits: 8
+  parity: none
+  stop_bits: 1
+  slave_address: 1
+  response_timeout_ms: 250
+bill_acceptor:
+  source: gpio-edge
+  gpio_chip: /dev/gpiochip0
+  gpio_line: 33
+  gpio_bias: pull-up
+  active_low: true
+  debounce_ms: 0
+  enabled: false
+inputs:
+- name: di1
+  address: 0
+  active_low: true
+- name: di2
+  address: 1
+  active_low: true
+- name: total_stop
+  address: 2
+  active_low: true
+  debounce_ms: 40
+- name: di4
+  address: 3
+  active_low: true
+- name: di5
+  address: 4
+  active_low: true
+- name: di6
+  address: 5
+  active_low: true
+- name: di7
+  address: 6
+  active_low: true
+- name: di8
+  address: 7
+  active_low: true
+outputs:
+- name: water
+  address: 0
+- name: osmos
+  address: 1
+- name: nano
+  address: 2
+- name: foam
+  address: 3
+- name: wax
+  address: 4
+- name: chem
+  address: 5
+- name: vacuum
+  address: 6
+- name: air
+  address: 7
+safety:
+  startup_all_off: true
+  shutdown_all_off: true
+  readback_after_write: true
+  controller_watchdog_ms: 2000

@@ -40,9 +40,19 @@ def encode_offline_code(payload: dict[str, object], site_token: str) -> str:
     return f"OL1.{payload_part}.{signature_part}"
 
 
+@unittest.skipUnless(os.environ.get("DATABASE_FLOW_TEST_DSN"), "Explicit disposable database required")
 class DatabaseFlowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        import psycopg
+        from app.config import settings
+        target=os.environ['DATABASE_FLOW_TEST_DSN']
+        with psycopg.connect(target) as connection:
+            if connection.info.dbname!='database_flow_test':
+                raise RuntimeError('Refusing destructive tests outside database_flow_test')
+        cls.original_dsn=settings.database_url
+        close_pool()
+        settings.database_url=target
         open_pool()
         with db() as conn:
             conn.execute(SCHEMA_SQL)
@@ -52,6 +62,8 @@ class DatabaseFlowTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls) -> None:
         close_pool()
+        from app.config import settings
+        settings.database_url=cls.original_dsn
 
     def setUp(self) -> None:
         with db() as conn:

@@ -1,0 +1,21 @@
+[Unit]
+Description=LABRIX touchscreen kiosk
+After=display-manager.service docker.service
+Wants=display-manager.service docker.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=kiosk
+Group=kiosk
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/kiosk/.Xauthority
+Environment=XCURSOR_THEME=SAMMOY-Invisible
+ExecStart=/opt/sammoy/sammoy2/deploy/kiosk-launch.sh
+Restart=always
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=15
+
+[Install]
+WantedBy=graphical.target

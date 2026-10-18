@@ -12,6 +12,7 @@ from psycopg.types.json import Jsonb
 
 from .config import settings
 from .db import db
+from .bonus import remaining as bonus_remaining
 from .io_client import io_request
 
 
@@ -26,6 +27,7 @@ RETENTION_DAYS = 90
 
 DEFAULT_WASH_PARAMETERS: dict[str, Any] = {
     "version": 1,
+    "topUpBonus": {"enabled": False, "percent": 10},
     "billPulseSum": BILL_PULSE_SUM,
     "coinPulseSum": COIN_PULSE_SUM,
     # Shared free-pause budget for the whole wash session.
@@ -83,6 +85,8 @@ def deep_merge(base: Any, override: Any) -> Any:
 
 def normalize_parameters(value: dict[str, Any] | None) -> dict[str, Any]:
     params = deep_merge(DEFAULT_WASH_PARAMETERS, value or {})
+    from .bonus import policy
+    params["topUpBonus"] = policy(params.get("topUpBonus"))
     params["billPulseSum"] = max(int(params.get("billPulseSum") or BILL_PULSE_SUM), 0)
     params["coinPulseSum"] = max(int(params.get("coinPulseSum") or COIN_PULSE_SUM), 0)
     free_pause_raw = params.get(
@@ -182,12 +186,15 @@ def normalize_parameters(value: dict[str, Any] | None) -> dict[str, Any]:
 class WashRuntime:
     def __init__(self) -> None:
         self.lock = threading.RLock()
+        self.shared_wallet_enabled = False
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.params = normalize_parameters(None)
         self.state: dict[str, Any] = {
             "phase": "idle",
             "creditSum": 0,
+            "bonusSum": 0,
+            "_bonusFloat": 0.0,
             "selectedMode": "pause",
             "armedMode": None,
             "activeMode": None,
@@ -215,6 +222,8 @@ class WashRuntime:
             "activeSessionCardUid": None,
             "lastRfidUid": None,
             "lastRfidStatus": "not_checked",
+            "lastRfidResult": "not_checked",
+            "lastRfidProcessedAt": None,
             "lastIoOk": False,
             "lastError": None,
 
@@ -235,6 +244,8 @@ class WashRuntime:
         self.last_rfid_seq = 0
         self.last_output: str | None = None
         self.io_failures = 0
+        self.io_boot_id = None
+        self.io_trip_seq = None
         self.active_session_id: int | None = None
         self.active_session_source = "unknown"
         self.active_session_card_uid: str | None = None
@@ -243,6 +254,7 @@ class WashRuntime:
         self.active_usage_mode: str | None = None
         self.pending_usage: dict[str, float] = {"duration_ms": 0.0, "spent_sum": 0.0, "pause_ms": 0.0, "total_stop_wait_ms": 0.0}
         self.ledger_spent_carry = 0.0
+        self.bonus_ledger_carry = 0.0
         self.last_ledger_flush = time.monotonic()
         self.last_retention_cleanup = 0.0
         self.simulation: dict[str, Any] = {
@@ -263,6 +275,8 @@ class WashRuntime:
         # the Owner-configured recovery window.
         self._recover_interrupted_sessions_sync()
 
+        from .wallet_post import initialize_runtime
+        initialize_runtime(self)
         self._cleanup_retention_sync()
         self._baseline_pulse_counters()
         self._baseline_rfid_events()
@@ -310,11 +324,37 @@ class WashRuntime:
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
             state = deepcopy(self.state)
+            state["bonusSum"]=bonus_remaining(self) if self.active_session_source!="vip" else 0
+            state["moneySum"]=0 if self.active_session_source=="vip" else max(0,int(state.get("creditSum") or 0)-state["bonusSum"])
+            state.pop("_bonusFloat",None)
+            state.pop("_lastBonusSpend",None)
             state.pop("_creditFloat", None)
             state.pop("_pauseBudgetFloat", None)
             state.pop("_pauseBudgetInitialized", None)
             state.pop("_triggerGraceFloat", None)
             state.pop("_triggerResetOffFloat", None)
+            state["runtimeAgeSeconds"] = max(0.0, (datetime.now(UTC) - datetime.fromisoformat(state["updatedAt"])).total_seconds())
+            # Read-only presentation: never advance a second client-side money/timer loop.
+            mode = state.get("activeMode") or state.get("armedMode")
+            credit = max(0, int(state.get("creditSum") or 0))
+            tariff = self.params.get("tariffs", {}).get(mode, {})
+            amount = int(tariff.get("amountSum") or 0)
+            duration = int(tariff.get("durationSeconds") or 0)
+            state["remainingSeconds"] = (
+                ceil(credit * duration / amount)
+                if mode and amount > 0 and duration > 0 else None
+            )
+            state["displayTimeKind"] = "program" if mode else "unselected"
+            if state.get("pauseState") == "free":
+                state["remainingSeconds"] = max(0, int(state.get("freePauseRemaining") or 0))
+                state["displayTimeKind"] = "free_pause"
+            elif state.get("pauseState") == "paid":
+                pause = self.params.get("paidPause", {})
+                cost = int(pause.get("amountSum") or 0)
+                seconds = int(pause.get("durationSeconds") or 0)
+                state["remainingSeconds"] = ceil(credit * seconds / cost) if cost > 0 and seconds > 0 else None
+                state["displayTimeKind"] = "paid_pause"
+            state["activeSessionSource"] = self.active_session_source
             state["activeSessionId"] = self.active_session_id
             state["activeSessionCardUid"] = self.active_session_card_uid
             return {
@@ -329,6 +369,8 @@ class WashRuntime:
             raise ValueError(f"Unknown wash mode: {mode}")
 
         with self.lock:
+            if self.state.get("walletTransferPending") and mode != "pause":
+                raise ValueError("Wallet transfer is pending; equipment remains OFF")
             if self.state.get("licenseLocked"):
                 self.state["phase"] = "license_locked"
                 self.state["selectedMode"] = "pause"
@@ -479,6 +521,7 @@ class WashRuntime:
             if remaining_credit > 0 and self.active_session_source == "vip":
                 close_reason = "vip_remaining_burned"
             self.state["creditSum"] = 0
+            self.state.update(bonusSum=0,_bonusFloat=0.0)
             self.state["_creditFloat"] = 0.0
             if self.active_session_id:
                 self._close_session_locked(close_reason)
@@ -507,11 +550,19 @@ class WashRuntime:
         source: str = "manual",
         idempotency_key: str | None = None,
         raw_payload: dict[str, Any] | None = None,
+        bonus_sum: int | None = None,
     ) -> dict[str, Any]:
         with self.lock:
+            if self.shared_wallet_enabled and self.active_session_source=='vip' and source!='vip':
+                raise ValueError('Денежное пополнение не смешивается с VIP-допуском')
             if self.state.get("licenseLocked") and source != "admin":
                 self.state["phase"] = "license_locked"
                 self.state["updatedAt"] = now_iso()
+                return self.snapshot()
+            if source=='click':
+                from .bonus_credit import accept
+                accept(self,int(amount_sum),idempotency_key or f"click:{time.monotonic_ns()}",raw_payload,bonus_sum)
+                self.state['updatedAt']=now_iso()
                 return self.snapshot()
             if idempotency_key:
                 with db() as conn:
@@ -521,7 +572,11 @@ class WashRuntime:
                     ).fetchone()
                 if existing:
                     return self.snapshot()
-            self.state["creditSum"] = max(0, int(self.state["creditSum"]) + int(amount_sum))
+            from .bonus import award, add
+            bonus = (award(amount_sum,self.params) if bonus_sum is None else bonus_sum) if source=="click" else 0
+            self.state["creditSum"] = max(0, int(self.state["creditSum"]) + int(amount_sum) + bonus)
+            add(self,bonus)
+            raw_payload={**(raw_payload or {"source":source}),"bonus_sum":bonus}
             self.state["_creditFloat"] = float(self.state["creditSum"])
             self.state["lastCreditSource"] = source
             if (
@@ -642,6 +697,7 @@ class WashRuntime:
         return self.snapshot()
 
     def _baseline_pulse_counters(self) -> None:
+        self._nv9_startup_pending = True
         try:
             io = self._get_io_sync()
         except Exception:
@@ -650,6 +706,10 @@ class WashRuntime:
 
         # SAMMOY2 / Radxa io-helper
         if isinstance(inputs_raw, dict):
+            if io.get("nv9_stream_id"):
+                from .cash_ingest import capture
+                capture(self, io, recover=True)
+                self._nv9_startup_pending = False
             self.last_bill_pulses = int(io.get("nv9_pulses") or 0)
             self.last_coin_pulses = 0
 
@@ -684,18 +744,41 @@ class WashRuntime:
             try:
                 self.tick()
             except Exception as exc:
+                print(f"WASH I/O ERROR: {exc}", flush=True)
                 with self.lock:
-                    self.state["lastError"] = str(exc)
-                    self.state["phase"] = "error"
-                    self.state["updatedAt"] = now_iso()
+                    self._io_fault(str(exc))
                 self._all_off_sync()
 
     def tick(self) -> None:
+        if getattr(self,'_click_credit_pending',None):
+            try:
+                from .bonus_credit import reconcile
+                with self.lock:reconcile(self)
+            except Exception as exc:
+                self._io_fault('Payment reconciliation unavailable');self._all_off_sync()
+                raise
         now = time.monotonic()
         elapsed = max(0.0, now - self.last_tick)
         self.last_tick = now
 
         io = self._get_io_sync()
+        from .io_safety import validate_io
+        try:
+            validate_io(io,self.last_output)
+            boot,trip=io.get('controller_boot_id'),io.get('safety_trip_seq')
+            changed=(self.io_boot_id is not None and boot!=self.io_boot_id) or (self.io_trip_seq is not None and trip!=self.io_trip_seq)
+            self.io_boot_id,self.io_trip_seq=boot,trip
+            if changed:raise RuntimeError('I/O controller restarted or safety protection tripped; select a mode again')
+        except Exception as exc:
+            try:
+                from .cash_ingest import capture
+                capture(self, io, recover=True)
+            finally:
+                self._io_fault(str(exc));self._all_off_sync()
+            raise
+        from .cash_ingest import capture
+        capture(self, io, recover=getattr(self,"_nv9_startup_pending",True))
+        self._nv9_startup_pending = False
         try:
             rfid_payload = self._get_rfid_events_sync(since=self.last_rfid_seq)
         except Exception as exc:
@@ -750,7 +833,7 @@ class WashRuntime:
             self.state["lastIoOk"] = True
             self.state["lastError"] = None
 
-            bill_delta = max(0, bill_pulses - self.last_bill_pulses)
+            bill_delta = 0 if io.get("nv9_stream_id") else max(0, bill_pulses - self.last_bill_pulses)
             coin_delta = max(0, coin_pulses - self.last_coin_pulses)
             self.last_bill_pulses = bill_pulses
             self.last_coin_pulses = coin_pulses
@@ -774,33 +857,15 @@ class WashRuntime:
                 pass
             elif bill_delta:
                 amount_sum = bill_delta * int(self.params["billPulseSum"])
-                self.state["creditSum"] += amount_sum
-                self.state["_creditFloat"] = float(self.state["creditSum"])
-                self.state["lastCreditSource"] = "bill_pulse"
-                self._record_credit_locked(
-                    amount_sum,
-                    "bill_pulse",
-                    bill_delta,
-                    {"rising_count": bill_pulses, "sum_per_pulse": int(self.params["billPulseSum"])},
-                )
+                self._accept_cash_locked(amount_sum,'bill_pulse',bill_delta,
+                    {"rising_count":bill_pulses,"sum_per_pulse":int(self.params['billPulseSum'])})
             if skip_runtime:
                 pass
             elif coin_delta:
                 amount_sum = coin_delta * int(self.params["coinPulseSum"])
-                self.state["creditSum"] += amount_sum
-                self.state["_creditFloat"] = float(self.state["creditSum"])
-                self.state["lastCreditSource"] = "coin_pulse"
-                self._record_credit_locked(
-                    amount_sum,
-                    "coin_pulse",
-                    coin_delta,
-                    {
-                        "physical_rising_count": physical_coin_pulses,
-                        "simulated_pulses": simulated_coin_pulses,
-                        "sum_per_pulse": int(self.params["coinPulseSum"]),
-                    },
-                )
-
+                self._accept_cash_locked(amount_sum,'coin_pulse',coin_delta,
+                    {"physical_rising_count":physical_coin_pulses,"simulated_pulses":simulated_coin_pulses,
+                     "sum_per_pulse":int(self.params['coinPulseSum'])})
             if skip_runtime:
                 requested_output = None
             else:
@@ -962,6 +1027,15 @@ class WashRuntime:
                 total_stop_active
                 or not trigger_required
             )
+
+            if self.state.get("walletTransferPending"):
+                self.state["phase"]="wallet_transfer_pending"
+                self.state["activeMode"]=None
+                self.state["requestedOutput"]=None
+                self.state["updatedAt"]=now_iso()
+                self._heartbeat_session_locked()
+                self._apply_output_sync(None)
+                return
 
             if skip_runtime:
                 self.state["requestedOutput"] = None
@@ -1223,15 +1297,18 @@ class WashRuntime:
 
                     requested_output = armed
 
+                    charge_elapsed = elapsed
+                    if isinstance(io.get("inputs"), dict) and self.last_output != armed:
+                        charge_elapsed = 0.0
                     spent_sum = self._charge_active_locked(
                         armed,
-                        elapsed,
+                        charge_elapsed,
                     )
 
                     self._track_usage_locked(
                         armed,
                         "active",
-                        elapsed,
+                        charge_elapsed,
                         spent_sum,
                     )
 
@@ -1243,6 +1320,7 @@ class WashRuntime:
             if int(self.state["creditSum"]) <= 0:
                 closing_session_id = self.active_session_id
                 self.state["creditSum"] = 0
+                self.state.update(bonusSum=0,_bonusFloat=0.0)
                 self.state["selectedMode"] = "pause"
                 self.state["armedMode"] = None
                 self.state["phase"] = "no_credit"
@@ -1260,7 +1338,9 @@ class WashRuntime:
 
                 requested_output = None
                 if closing_session_id:
-                    self._close_session_locked("credit_empty")
+                    from .wallet_payments import waiting_payment
+                    if not waiting_payment(self):
+                        self._close_session_locked("credit_empty")
 
             self.state["requestedOutput"] = requested_output
             self.state["updatedAt"] = now_iso()
@@ -1286,7 +1366,21 @@ class WashRuntime:
         # Flooring here used to close the session early and lose the final
         # fraction from both service time and the accounting ledger.
         self.state["creditSum"] = int(ceil(next_credit))
+        from .bonus import spend
+        spend(self,spent_sum)
         return spent_sum
+
+    def _accept_cash_locked(self,amount_sum,source,pulse_count,raw):
+        from .wallet_payments import defer_vip_cash
+        if defer_vip_cash(self,amount_sum,source,pulse_count,raw):return
+        from .bonus import award, add
+        bonus=award(amount_sum,self.params)
+        self.state['creditSum']+=amount_sum+bonus
+        add(self,bonus)
+        raw={**raw,'bonus_sum':bonus}
+        self.state['_creditFloat']=float(self.state['creditSum'])
+        self.state['lastCreditSource']=source
+        self._record_credit_locked(amount_sum,source,pulse_count,raw)
 
     def _source_for_session(self, source: str) -> str:
         if source in {"bill_pulse", "coin_pulse"}:
@@ -1335,14 +1429,46 @@ class WashRuntime:
                 self._apply_rfid_card_locked(uid, event)
             except Exception as exc:
                 self.state["lastRfidStatus"] = f"rfid_error: {exc}"
+            self.state["lastRfidResult"] = self.state["lastRfidStatus"]
+            self.state["lastRfidProcessedAt"] = event.get("time") or now_iso()
 
     def _apply_rfid_card_locked(self, uid: str, event: dict[str, Any]) -> None:
+        if self.shared_wallet_enabled:
+            from .wallet_post import handle_card, pending_job, freeze
+            try:
+                freeze(self)
+                from .wallet_post import assignment
+                ctx=assignment()
+                job=pending_job()
+                if (ctx and ctx.get('is_vip') and ctx['uid']==uid) or (job and job['uid']==uid and job['payload'].get('is_vip')):
+                    from .wallet_vip import handle_card as handle_vip
+                    handle_vip(self,uid,event)
+                else:
+                    from .wallet_client import inspect as inspect_shared_card
+                    card=inspect_shared_card(uid)
+                    if card and card['state'].get('card_type')=='vip':
+                        from .wallet_vip import handle_card as handle_vip
+                        handle_vip(self,uid,event)
+                    else:handle_card(self,uid,event)
+            except Exception as exc:
+                job=pending_job()
+                if getattr(exc,'definitive',False) and job and job['kind']=='load' and job['payload']['stage'] in {'reserve','grant'}:
+                    with db() as conn:
+                        conn.execute("UPDATE shared_wallet_post_jobs SET status='done',completed_at=now(),payload=payload || %s WHERE id=%s",(Jsonb({'rejected':str(exc)}),job['id']));conn.commit()
+                pending=pending_job()
+                self.state['walletTransferPending']=bool(pending)
+                self.state['walletTransferVip']=bool(pending and pending['payload'].get('is_vip'))
+                self.state['lastRfidStatus']='wallet_error'
+                self.state['walletLastError']=str(exc)[:200]
+                if not self.state['walletTransferPending']:
+                    self.state['phase']='manual_pause' if self.state.get('armedMode') else 'idle'
+            return
         with db() as conn:
             card = conn.execute(
                 """
                 SELECT c.uid, c.card_type, c.status, c.enabled, c.balance_sum, c.vip_profile_id,
                        p.code AS vip_code, p.name AS vip_name, p.enabled AS vip_enabled,
-                       p.grant_seconds, p.max_uses_per_day
+                       p.grant_seconds, p.max_uses_per_day, c.expires_at
                 FROM rfid_cards c
                 LEFT JOIN vip_profiles p ON p.id = c.vip_profile_id
                 WHERE c.uid = %s
@@ -1384,7 +1510,7 @@ class WashRuntime:
                 (uid,),
             )
 
-            if not card["enabled"] or card["status"] != "active":
+            if not card["enabled"] or card["status"] != "active" or (card.get('expires_at') and card['expires_at']<=datetime.now(UTC)):
                 conn.execute(
                     """
                     INSERT INTO system_events (level, event_type, source, message, context)
@@ -1469,7 +1595,7 @@ class WashRuntime:
                     FROM rfid_card_ledger
                     WHERE card_uid = %s
                       AND reason = 'vip_grant'
-                      AND created_at >= date_trunc('day', now())
+                      AND created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Tashkent') AT TIME ZONE 'Asia/Tashkent'
                     """,
                     (uid,),
                 ).fetchone()["count"]
@@ -1543,6 +1669,7 @@ class WashRuntime:
             return
         session_id = self.active_session_id
         self.state["creditSum"] = 0
+        self.state.update(bonusSum=0,_bonusFloat=0.0)
         self.state["_creditFloat"] = 0.0
         self.state["selectedMode"] = "pause"
         self.state["armedMode"] = None
@@ -1566,13 +1693,15 @@ class WashRuntime:
                 """
                 UPDATE rfid_cards
                 SET balance_sum = balance_sum + %s,
+                    bonus_sum = bonus_sum + %s,
                     last_seen_at = now(),
                     updated_at = now()
                 WHERE uid = %s
                 RETURNING balance_sum
                 """,
-                (amount_sum, uid),
+                (amount_sum, bonus_remaining(self), uid),
             ).fetchone()
+            conn.execute('UPDATE wash_sessions SET bonus_remaining_sum=0 WHERE id=%s',(session_id,))
             balance_after = int(row["balance_sum"] if row else amount_sum)
             conn.execute(
                 """
@@ -1595,6 +1724,7 @@ class WashRuntime:
             )
             conn.commit()
         self.state["creditSum"] = 0
+        self.state.update(bonusSum=0,_bonusFloat=0.0)
         self.state["_creditFloat"] = 0.0
         self.state["selectedMode"] = "pause"
         self.state["armedMode"] = None
@@ -1608,10 +1738,13 @@ class WashRuntime:
         if amount_sum <= 0:
             return
         with db() as conn:
+            card=conn.execute('SELECT bonus_sum FROM rfid_cards WHERE uid=%s FOR UPDATE',(uid,)).fetchone()
+            bonus=int((card or {}).get('bonus_sum') or 0)
             row = conn.execute(
                 """
                 UPDATE rfid_cards
                 SET balance_sum = 0,
+                    bonus_sum = 0,
                     last_seen_at = now(),
                     updated_at = now()
                 WHERE uid = %s
@@ -1628,7 +1761,11 @@ class WashRuntime:
         self.state["creditSum"] = max(0, int(self.state["creditSum"]) + amount_sum)
         self.state["_creditFloat"] = float(self.state["creditSum"])
         self.state["lastCreditSource"] = "card"
+        from .bonus import add
+        add(self,bonus)
         self._record_credit_locked(amount_sum, "card", None, {"uid": uid, "rfid_event": event})
+        with db() as conn:
+            conn.execute("UPDATE wash_sessions SET bonus_remaining_sum=%s WHERE id=%s",(self.state["bonusSum"],self.active_session_id));conn.commit()
         session_id = self.active_session_id
         with db() as conn:
             conn.execute(
@@ -1711,6 +1848,7 @@ class WashRuntime:
             return
         session_id = self._ensure_session_locked(source)
         provider = self._provider_for_payment(source)
+        idempotency_key=idempotency_key or f"{source}:{session_id}:{time.monotonic_ns()}"
         with db() as conn:
             conn.execute(
                 """
@@ -1727,6 +1865,10 @@ class WashRuntime:
                     Jsonb(raw_payload),
                 ),
             )
+            from .bonus import remaining
+            bonus=int(raw_payload.get('bonus_sum') or 0)
+            conn.execute("UPDATE payments SET bonus_sum=%s WHERE idempotency_key=%s",(bonus,idempotency_key or ''))
+            conn.execute("UPDATE wash_sessions SET bonus_granted_sum=bonus_granted_sum+%s,bonus_remaining_sum=%s WHERE id=%s",(bonus,remaining(self),session_id))
             if source in {"bill_pulse", "coin_pulse"} and pulse_count:
                 conn.execute(
                     """
@@ -1786,6 +1928,7 @@ class WashRuntime:
         elif usage_kind == "total_stop_wait":
             self.pending_usage["total_stop_wait_ms"] += elapsed_ms
         self.pending_usage["spent_sum"] += spent_sum
+        self.pending_usage["bonus_spent_sum"]=self.pending_usage.get("bonus_spent_sum",0)+float(self.state.pop("_lastBonusSpend",0))
 
     def _take_ledger_spent_locked(self, settle: bool = False) -> int:
         pending = float(self.pending_usage.get("spent_sum") or 0.0)
@@ -1801,9 +1944,16 @@ class WashRuntime:
         spent_sum = self._take_ledger_spent_locked(settle=settle_spent)
         pause_ms = int(self.pending_usage.get("pause_ms") or 0)
         total_stop_wait_ms = int(self.pending_usage.get("total_stop_wait_ms") or 0)
+        bonus_float=float(getattr(self,"bonus_ledger_carry",0))+float(self.pending_usage.get("bonus_spent_sum",0))
+        bonus_spent=int(round(bonus_float)) if settle_spent else int(bonus_float)
+        self.bonus_ledger_carry=0. if settle_spent else bonus_float-bonus_spent
         if duration_ms <= 0 and spent_sum <= 0 and pause_ms <= 0 and total_stop_wait_ms <= 0 and not close:
             return
         with db() as conn:
+            from .bonus import remaining
+            if self.active_session_id:
+                conn.execute("UPDATE wash_sessions SET bonus_spent_sum=bonus_spent_sum+GREATEST(0,bonus_remaining_sum-%s),bonus_remaining_sum=%s WHERE id=%s",(remaining(self),remaining(self),self.active_session_id))
+            conn.execute("UPDATE mode_usage SET bonus_spent_sum=bonus_spent_sum+%s WHERE id=%s",(bonus_spent,self.active_usage_id))
             conn.execute(
                 """
                 UPDATE mode_usage
@@ -1840,6 +1990,9 @@ class WashRuntime:
         session_id = self.active_session_id
         self._flush_usage_locked(close=True, settle_spent=True)
         with db() as conn:
+            from .bonus import remaining
+            if self.active_session_id:
+                conn.execute("UPDATE wash_sessions SET bonus_spent_sum=bonus_spent_sum+GREATEST(0,bonus_remaining_sum-%s),bonus_remaining_sum=%s WHERE id=%s",(remaining(self),remaining(self),self.active_session_id))
             conn.execute(
                 """
                 UPDATE wash_sessions
@@ -1869,8 +2022,21 @@ class WashRuntime:
         self.active_session_card_uid = None
         self.active_session_initial_credit = 0
         self.ledger_spent_carry = 0.0
+        self.bonus_ledger_carry = 0.0
         self.state["activeSessionId"] = None
         self.state["activeSessionCardUid"] = None
+        if self.shared_wallet_enabled and int(self.state.get('creditSum') or 0)==0:
+            from .wallet_post import assignment, handle_card, pending_job
+            try:
+                ctx=assignment()
+                if ctx and ctx['session_id']==session_id:
+                    if ctx.get('is_vip'):
+                        from .wallet_vip import handle_card as handle_vip
+                        handle_vip(self,ctx['uid'],{'source':'session_end'})
+                    else:handle_card(self,ctx['uid'],{'source':'session_end'})
+            except Exception as exc:
+                self.state['walletTransferPending']=bool(pending_job())
+                self.state['walletLastError']=str(exc)[:200]
 
     def _heartbeat_session_locked(self) -> None:
         """
@@ -1883,6 +2049,9 @@ class WashRuntime:
             return
 
         with db() as conn:
+            from .bonus import remaining
+            if self.active_session_id:
+                conn.execute("UPDATE wash_sessions SET bonus_spent_sum=bonus_spent_sum+GREATEST(0,bonus_remaining_sum-%s),bonus_remaining_sum=%s WHERE id=%s",(remaining(self),remaining(self),self.active_session_id))
             conn.execute(
                 """
                 UPDATE wash_sessions
@@ -1957,6 +2126,7 @@ class WashRuntime:
                     paid_sum,
                     total_spent_sum,
                     final_credit_sum,
+                    bonus_remaining_sum,
                     metadata,
                     started_at,
                     runtime_seen_at,
@@ -2256,6 +2426,8 @@ class WashRuntime:
                 self.active_usage_mode = None
 
                 self.state["creditSum"] = remaining_credit
+                from .bonus import restore
+                restore(self,recover_candidate.get("bonus_remaining_sum",0))
                 self.state["_creditFloat"] = float(remaining_credit)
 
                 # SAFETY:
@@ -2298,20 +2470,9 @@ class WashRuntime:
 
 
     def _cleanup_retention_sync(self) -> None:
-        try:
-            with db() as conn:
-                conn.execute("DELETE FROM auth_revoked_tokens WHERE expires_at < now()")
-                conn.execute("DELETE FROM settings_history WHERE created_at < now() - interval '90 days'")
-                conn.execute("DELETE FROM mode_usage WHERE started_at < now() - interval '90 days'")
-                conn.execute("DELETE FROM cash_events WHERE created_at < now() - interval '90 days'")
-                conn.execute("DELETE FROM payments WHERE created_at < now() - interval '90 days'")
-                conn.execute("DELETE FROM rfid_card_ledger WHERE created_at < now() - interval '90 days'")
-                conn.execute("DELETE FROM click_payment_intents WHERE created_at < now() - interval '90 days'")
-                conn.execute("DELETE FROM wash_sessions WHERE started_at < now() - interval '90 days'")
-                conn.execute("DELETE FROM system_events WHERE created_at < now() - interval '90 days'")
-                conn.commit()
-        except Exception:
-            pass
+        # Retention is now scheduled independently in app.retention.
+        # No database cleanup may block the wash control loop.
+        return
 
     def _ensure_pause_budget_locked(self) -> None:
         """
@@ -2443,6 +2604,8 @@ class WashRuntime:
         self.state["creditSum"] = int(
             ceil(next_credit)
         )
+        from .bonus import spend
+        spend(self,spent_sum)
 
         return spent_sum
 
@@ -2456,12 +2619,25 @@ class WashRuntime:
         self.state["freePauseRemaining"] = remaining
         return remaining, chargeable_elapsed
 
+    def _io_fault(self,message):
+        with self.lock:
+            self.state.update(lastIoOk=False,lastError=message,phase='error',selectedMode='pause',armedMode=None,
+                              activeMode=None,requestedOutput=None,pauseState='none',
+                              resumeRequiresTriggerReset=bool(self.state.get('totalStopActive')),updatedAt=now_iso())
+            self.last_output=None
+            self.last_tick=time.monotonic()
+
     def _get_io_sync(self) -> dict[str, Any]:
         try:
             with httpx.Client(timeout=2.0) as client:
+                heartbeat=client.post(f"{settings.io_helper_url}/controller/heartbeat",json={})
+                heartbeat.raise_for_status()
                 response = client.get(f"{settings.io_helper_url}/io")
                 response.raise_for_status()
-                return response.json()
+                payload = response.json()
+                if not isinstance(payload.get("inputs"), dict) or not payload.get("nv9_stream_id"):
+                    raise RuntimeError("Durable native I/O protocol is required")
+                return payload
         except Exception:
             with self.lock:
                 self.io_failures += 1
@@ -2485,44 +2661,60 @@ class WashRuntime:
             raise ValueError(f"Unsupported output: {output}")
 
         try:
-            with httpx.Client(timeout=3.0) as client:
-                # Safe exclusive-output policy:
-                # first force every wash output OFF,
-                # then energize only the requested output.
-                for name in sorted(MODE_OUTPUTS):
+            if not self._all_off_sync():
+                raise RuntimeError("Not all outputs confirmed OFF")
+            if output is not None:
+                with httpx.Client(timeout=3.0) as client:
+                    # The confirmed OFF sweep can consume most of the controller
+                    # lease on a real serial board. Renew only after it succeeds,
+                    # immediately before this explicitly requested ON operation.
+                    heartbeat = client.post(f"{settings.io_helper_url}/controller/heartbeat", json={})
+                    heartbeat.raise_for_status()
+                    if heartbeat.json().get("controller_lease_valid") is not True:
+                        raise RuntimeError("Controller lease renewal not confirmed")
                     response = client.post(
-                        f"{settings.io_helper_url}/outputs/{name}",
-                        json={"on": False},
+                        f"{settings.io_helper_url}/outputs/{output}", json={"on": True},
                     )
                     response.raise_for_status()
-
-                if output is not None:
-                    response = client.post(
-                        f"{settings.io_helper_url}/outputs/{output}",
-                        json={"on": True},
-                    )
-                    response.raise_for_status()
-
+                    if response.json().get("actual") is not True:
+                        raise RuntimeError("ON readback not confirmed")
             self.last_output = output
-
         except Exception:
             self.last_output = None
+            self._all_off_sync()
             raise
 
-    def _all_off_sync(self) -> None:
+    def _all_off_sync(self) -> bool:
+        errors=[]
         try:
             with httpx.Client(timeout=3.0) as client:
-                for name in sorted(MODE_OUTPUTS):
-                    response = client.post(
-                        f"{settings.io_helper_url}/outputs/{name}",
-                        json={"on": False},
-                    )
+                try:
+                    response=client.post(f"{settings.io_helper_url}/controller/all-off",json={})
                     response.raise_for_status()
-
-            self.last_output = None
-
-        except Exception:
-            self.last_output = None
+                    proof=response.json()
+                    outputs=proof.get('outputs',{})
+                    if proof.get('off_confirmed') is True and set(outputs)==set(MODE_OUTPUTS) and all(v is False for v in outputs.values()):
+                        with self.lock:
+                            self.last_output=None
+                            self.state['outputsOffConfirmed']=True
+                            self.state['outputsOffErrors']=[]
+                        return True
+                except Exception:
+                    # Older helper or failed proof: retain exhaustive emergency
+                    # OFF attempts. No ON until one complete proof succeeds.
+                    pass
+                for name in sorted(MODE_OUTPUTS):
+                    try:
+                        response=client.post(f"{settings.io_helper_url}/outputs/{name}",json={"on":False})
+                        response.raise_for_status()
+                        if response.json().get('actual') is not False:raise RuntimeError('OFF readback not confirmed')
+                    except Exception:errors.append(name)
+        except Exception:errors=list(MODE_OUTPUTS)
+        with self.lock:
+            self.last_output=None
+            self.state['outputsOffConfirmed']=not errors
+            self.state['outputsOffErrors']=errors
+        return not errors
 
 
 wash_runtime = WashRuntime()

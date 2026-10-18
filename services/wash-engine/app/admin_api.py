@@ -1,4 +1,5 @@
 from datetime import datetime, UTC
+from uuid import UUID
 import asyncio
 import os
 from pathlib import Path
@@ -109,3 +110,70 @@ async def network_action(action:Literal['apply','confirm','rollback'],payload:di
     result=await network_request('/'+action,'POST',payload)
     audit(user,'admin_network_'+action,'Network '+action+' requested')
     return result
+
+@router.get('/service/storage')
+def storage(user:Admin):
+    from .retention import EVENT_MONTHS, FINANCIAL_MONTHS
+    disk=shutil.disk_usage(settings.kiosk_assets_dir)
+    free_percent=round(disk.free/disk.total*100,1)
+    level='critical' if disk.free<1024**3 or free_percent<5 else 'warning' if disk.free<2*1024**3 or free_percent<10 else 'ok'
+    with db() as conn:
+        conn.execute("SET LOCAL statement_timeout='3s'")
+        size=conn.execute('SELECT pg_database_size(current_database()) AS bytes').fetchone()['bytes']
+        events=conn.execute('SELECT count(*) AS count,min(created_at) AS oldest FROM system_events').fetchone()
+        status=conn.execute("SELECT setting_value FROM app_settings WHERE setting_key='retention_status'").fetchone()
+        protected=conn.execute("SELECT count(*) AS count,coalesce(sum(amount_sum),0) AS amount_sum FROM recovery_credits WHERE status='unclaimed'").fetchone()
+    return {'ok':True,'disk_total_bytes':disk.total,'disk_free_bytes':disk.free,'free_percent':free_percent,
+        'database_bytes':size,'level':level,'events':events,'protected_credit':protected,
+        'retention':{'event_months':EVENT_MONTHS,'financial_months':FINANCIAL_MONTHS,'journal_limit_mb':256,
+                     'last_run':status['setting_value'] if status else None}}
+
+from uuid import UUID
+@router.get('/service/click-payments')
+def click_payments(user:Admin,
+    status:Literal['all','local_pending','pending','prepared','paid','credited','cancelled','expired','error']='all',
+    before_time:datetime|None=None,before_id:UUID|None=None,limit:int=Query(30,ge=1,le=100)):
+    from .main import serialize_click_intent
+    if (before_time is None)!=(before_id is None):raise HTTPException(422,'Both cursor fields are required')
+    with db() as conn:
+        conn.execute("SET LOCAL statement_timeout='3s'")
+        rows=conn.execute("""SELECT * FROM click_payment_intents
+            WHERE (%s='all' OR status=%s)
+            AND (%s::timestamptz IS NULL OR (created_at,id)<(%s::timestamptz,%s::uuid))
+            ORDER BY created_at DESC,id DESC LIMIT %s""",(status,status,before_time,before_time,before_id,limit+1)).fetchall()
+        summary=conn.execute("""SELECT status,count(*) AS count,coalesce(sum(amount_sum),0) AS amount_sum
+            FROM click_payment_intents GROUP BY status""").fetchall()
+    page=rows[:limit]
+    return {'ok':True,'intents':[serialize_click_intent(r) for r in page],'summary':summary,'has_more':len(rows)>limit,
+        'next_cursor':{'before_time':page[-1]['created_at'].isoformat(),'before_id':str(page[-1]['id'])} if len(rows)>limit else None}
+
+
+class TestCreditRequest(BaseModel):
+    amount_sum: int = Field(strict=True, ge=1, le=100_000)
+    operation_id: UUID
+    reason: str = Field(min_length=5, max_length=200)
+    confirmation: str
+
+
+@router.post('/service/test-credit')
+def test_credit(payload: TestCreditRequest, user: Admin):
+    """Audited bench credit: not a cash pulse or a Click payment."""
+    if payload.confirmation != f'TEST CREDIT {payload.amount_sum}':
+        raise HTTPException(422, 'Подтвердите сумму тестового начисления')
+    key='admin-test:'+str(payload.operation_id)
+    with wash_runtime.lock:
+        with db() as conn:
+            previous=conn.execute('SELECT provider,amount_sum,raw_payload FROM payments WHERE idempotency_key=%s',(key,)).fetchone()
+        if previous:
+            raw=previous['raw_payload'] or {}
+            if previous['provider']!='admin' or previous['amount_sum']!=payload.amount_sum or raw.get('reason')!=payload.reason or raw.get('changed_by')!=user['login'] or raw.get('test_credit') is not True:
+                raise HTTPException(409, 'Идентификатор уже использован для другой операции')
+            return {'ok':True,'already_applied':True,**wash_runtime.snapshot()}
+        require_idle(wash_runtime)
+        state=wash_runtime.snapshot()['state']
+        if state.get('licenseLocked') or state.get('lastIoOk') is not True:
+            raise HTTPException(409, 'Проверьте лицензию и связь с оборудованием')
+        result=wash_runtime.add_credit(payload.amount_sum,'admin',idempotency_key=key,
+            raw_payload={'test_credit':True,'reason':payload.reason,'changed_by':user['login'],'changed_by_user_id':user['id']},bonus_sum=0)
+        audit(user,'admin_test_credit',f'Test credit {payload.amount_sum}; operation {payload.operation_id}; {payload.reason}')
+        return {'ok':True,'already_applied':False,**result}

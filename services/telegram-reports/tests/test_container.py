@@ -84,3 +84,41 @@ def test_reset_invalidates_unused_pairing_links(configured):
     raw,_=store.create_token(10)
     store.reset_owner()
     assert not store.claim(raw,999,'old-link','Old')
+
+def test_discovery_uses_current_network(configured,monkeypatch):
+    hosts=[];original=httpx.AsyncClient
+    def handle(req):
+        hosts.append(req.url.host)
+        return httpx.Response(200,json={'site_id':'SITE-1','post_id':'POST-01','node_id':'local'})
+    monkeypatch.setattr(setup.httpx,'AsyncClient',lambda **kw:original(transport=httpx.MockTransport(handle),**kw))
+    assert configured.post('/discover',json={'cidr':'10.20.30.0/30'}).status_code==200
+    assert set(hosts)=={'10.20.30.1','10.20.30.2','127.0.0.1'}
+    assert configured.post('/discover',json={'cidr':'8.8.8.0/24'}).status_code==409
+
+
+def test_leadership_does_not_erase_bot_configuration(configured):
+    setup.write_env({'TELEGRAM_ENABLED':'true','TELEGRAM_BOT_TOKEN':'fixture-token'})
+    r=configured.post('/leadership',json={'active':False,'primary_post':7})
+    assert r.status_code==200
+    assert not configured.get('/status').json()['enabled']
+    assert setup.read_env()['TELEGRAM_BOT_TOKEN']=='fixture-token'
+    assert setup.read_env()['TELEGRAM_ENABLED']=='true'
+    r=configured.post('/leadership',json={'active':True,'primary_post':7})
+    assert r.status_code==200
+    assert configured.get('/status').json()['enabled']
+
+
+def test_report_backup_preserves_pairing_notifications_without_enabling_standby(configured):
+    store=setup.PairingStore(setup.DATA_PATH)
+    raw,_=store.create_token(10,'fixture');assert store.claim(raw,123,'owner','Owner')
+    store.set_state('automatic_daily_report_date','2026-10-07')
+    setup.write_env({'TELEGRAM_BOT_TOKEN':'fixture-token','TELEGRAM_ENABLED':'true','TELEGRAM_LEADER':'false'})
+    snapshot=configured.get('/backup/export').json()
+    store.reset_owner();setup.write_env({'TELEGRAM_BOT_TOKEN':''})
+    assert configured.post('/backup/import',json=snapshot).status_code==200
+    assert setup.PairingStore(setup.DATA_PATH).owner()['telegram_user_id']==123
+    assert setup.PairingStore(setup.DATA_PATH).state('automatic_daily_report_date')=='2026-10-07'
+    assert setup.read_env()['TELEGRAM_BOT_TOKEN']=='fixture-token'
+    assert not configured.get('/status').json()['enabled']
+    snapshot['site_id']='OTHER'
+    assert configured.post('/backup/import',json=snapshot).status_code==409

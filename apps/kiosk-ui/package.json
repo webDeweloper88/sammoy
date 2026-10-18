@@ -8,10 +8,20 @@
     "build": "vite build",
     "test:touch": "node tests/touch.mjs",
     "test:owner": "node tests/owner.mjs",
-    "test:install": "node tests/install.mjs"
+    "test:install": "node tests/install.mjs",
+    "test:admin": "node tests/admin.mjs",
+    "test:wash": "node tests/wash.mjs",
+    "test:wash-idle": "node tests/wash-idle.mjs",
+    "test:idle": "node tests/idle.mjs",
+    "test:appearance": "node tests/appearance.mjs",
+    "test:footer": "node tests/footer.mjs",
+    "test:cards": "node tests/cards.mjs",
+    "test:preview": "node tests/preview.mjs",
+    "test:launch": "node tests/launch.mjs"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "^6.0.1",
+    "qrcode.vue": "^3.10.0",
     "vite": "^7.0.0",
     "vue": "^3.5.0"
   },

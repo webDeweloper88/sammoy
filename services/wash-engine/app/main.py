@@ -200,16 +200,6 @@ ALTER TABLE rfid_cards ADD COLUMN IF NOT EXISTS vip_profile_id BIGINT REFERENCES
 ALTER TABLE rfid_cards ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 ALTER TABLE rfid_cards ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
 
-UPDATE rfid_cards
-SET card_type = 'customer',
-    status = 'active',
-    enabled = true,
-    updated_at = now()
-WHERE card_type = 'vip'
-  AND status = 'blocked'
-  AND enabled = false
-  AND vip_profile_id IS NULL;
-
 CREATE INDEX IF NOT EXISTS rfid_cards_type_status_idx
 ON rfid_cards (card_type, status, enabled);
 
@@ -482,6 +472,15 @@ ON system_events (event_type, created_at DESC);
 """
 
 
+from .financial_ids import FINANCIAL_IDS_SQL
+from .bonus import BONUS_SCHEMA_SQL
+from .vip_migration import VIP_IMPORT_SCHEMA_SQL
+SCHEMA_SQL += VIP_IMPORT_SCHEMA_SQL
+SCHEMA_SQL += BONUS_SCHEMA_SQL
+SCHEMA_SQL += FINANCIAL_IDS_SQL
+from .local_balance_import import IMPORT_SCHEMA_SQL
+SCHEMA_SQL += IMPORT_SCHEMA_SQL
+
 def seed_user(login: str, password: str, role: str, display_name: str) -> None:
     with db() as conn:
         existing = conn.execute(
@@ -646,6 +645,14 @@ def get_commissioning_state() -> dict[str, object]:
     return {"complete": inferred, "completed_at": None}
 
 
+def protect_shared_wallet_identity(next_config):
+    if not wash_runtime.shared_wallet_enabled:
+        return
+    current=get_license_settings()
+    if any(next_config.get(key)!=current.get(key) for key in ('site_code','post_no','site_token')):
+        raise HTTPException(409,'Мойку, номер поста и ключ установленного кошелька нельзя менять без финансовой сверки')
+
+
 def save_commissioning_config(
     site_code: str,
     post_no: int,
@@ -653,6 +660,7 @@ def save_commissioning_config(
     site_token: str,
     click_enabled: bool,
 ) -> None:
+    protect_shared_wallet_identity({'site_code':site_code,'post_no':post_no,'site_token':site_token})
     license_config = normalize_license_settings(
         {
             "enabled": True,
@@ -1392,6 +1400,12 @@ def startup() -> None:
     open_pool()
     with db() as conn:
         conn.execute(SCHEMA_SQL)
+        from .wallet_store import WALLET_SCHEMA_SQL
+        conn.execute(WALLET_SCHEMA_SQL)
+        from .wallet_post import POST_SCHEMA_SQL
+        conn.execute(POST_SCHEMA_SQL)
+        from .wallet_payments import PAYMENT_SCHEMA_SQL
+        conn.execute(PAYMENT_SCHEMA_SQL)
         conn.commit()
     seed_user(settings.default_owner_login, settings.default_owner_password, "owner", "RTU WASH owner")
     seed_user(settings.default_admin_login, settings.default_admin_password, "admin", "RTU WASH admin")
@@ -1406,7 +1420,8 @@ def startup() -> None:
 
 
 @app.on_event("shutdown")
-def shutdown() -> None:
+async def shutdown() -> None:
+    await retention.stop()
     connectivity_stop_event.set()
     if connectivity_thread:
         connectivity_thread.join(timeout=2)
@@ -1580,7 +1595,7 @@ def admin_ping(user: Annotated[dict, Depends(require_role("admin"))]) -> dict[st
 
 
 @app.get("/api/owner/ping")
-def owner_ping(user: Annotated[dict, Depends(require_role("owner", "admin"))]) -> dict[str, object]:
+def owner_ping(user: Annotated[dict, Depends(require_role("owner"))]) -> dict[str, object]:
     return {"ok": True, "role": user["role"]}
 
 
@@ -1621,11 +1636,14 @@ def owner_reports_summary(
             """
             SELECT count(*) AS count,
                    count(*) FILTER (WHERE status = 'running') AS running_count,
-                   count(*) FILTER (WHERE status = 'closed') AS closed_count,
+                   count(*) FILTER (WHERE status IN ('ended', 'closed')) AS closed_count,
                    count(*) FILTER (WHERE status = 'cancelled') AS cancelled_count,
-                   COALESCE(sum(paid_sum), 0) AS paid_sum,
-                   COALESCE(sum(total_spent_sum), 0) AS spent_sum,
-                   COALESCE(sum(final_credit_sum), 0) AS final_credit_sum
+                   COALESCE(sum(paid_sum) FILTER (WHERE source IS DISTINCT FROM 'vip'), 0) AS paid_sum,
+                   COALESCE(sum(total_spent_sum) FILTER (WHERE source IS DISTINCT FROM 'vip'), 0) AS spent_sum,
+                   COALESCE(sum(bonus_granted_sum),0) AS bonus_granted_sum,
+                   COALESCE(sum(bonus_spent_sum),0) AS bonus_spent_sum,
+                   COALESCE(sum(total_spent_sum) FILTER (WHERE source = 'vip'), 0) AS vip_virtual_spent_sum,
+                   COALESCE(sum(final_credit_sum) FILTER (WHERE source IS DISTINCT FROM 'vip'), 0) AS final_credit_sum
             FROM wash_sessions
             WHERE started_at >= %s AND started_at < %s
               AND (
@@ -1642,7 +1660,7 @@ def owner_reports_summary(
         ).fetchone()
         payments = conn.execute(
             """
-            SELECT provider, count(*) AS count, COALESCE(sum(amount_sum), 0) AS amount_sum
+            SELECT provider, count(*) AS count, COALESCE(sum(amount_sum), 0) AS amount_sum, COALESCE(sum(bonus_sum),0) AS bonus_sum
             FROM payments
             WHERE created_at >= %s AND created_at < %s
               AND status IN ('paid', 'credited')
@@ -1688,11 +1706,14 @@ def owner_reports_summary(
             """
             SELECT mode,
                    COALESCE(sum(duration_ms), 0) AS duration_ms,
-                   COALESCE(sum(spent_sum), 0) AS spent_sum,
+                   COALESCE(sum(mode_usage.spent_sum-mode_usage.bonus_spent_sum) FILTER (WHERE usage_session.source IS DISTINCT FROM 'vip'), 0) AS spent_sum,
+                   COALESCE(sum(mode_usage.bonus_spent_sum),0) AS bonus_spent_sum,
+                   COALESCE(sum(spent_sum) FILTER (WHERE usage_session.source = 'vip'), 0) AS vip_virtual_spent_sum,
                    COALESCE(sum(pause_ms), 0) AS pause_ms,
                    COALESCE(sum(total_stop_wait_ms), 0) AS total_stop_wait_ms
             FROM mode_usage
-            WHERE started_at >= %s AND started_at < %s
+            JOIN wash_sessions usage_session ON usage_session.id = mode_usage.wash_session_id
+            WHERE mode_usage.started_at >= %s AND mode_usage.started_at < %s
               AND (
                 %s = 'all'
                 OR EXISTS (
@@ -1743,13 +1764,13 @@ def owner_reports_summary(
             (start_at, end_at, payment_method, payment_method, sessions_limit, sessions_offset),
         ).fetchall()
 
-    payments_by_provider = {row["provider"]: {"count": int(row["count"]), "amount_sum": int(row["amount_sum"] or 0)} for row in payments}
+    payments_by_provider = {row["provider"]: {"count": int(row["count"]), "amount_sum": int(row["amount_sum"] or 0),"bonus_sum":int(row.get("bonus_sum") or 0)} for row in payments}
     rfid_by_reason = {row["reason"]: row for row in rfid}
     customer_saved = rfid_by_reason.get("save_remaining")
     customer_used = rfid_by_reason.get("use_balance")
     vip_grants = rfid_by_reason.get("vip_grant")
     reconciliation = reconcile_session_credit(
-        paid_sum=int_value(sessions, "paid_sum"),
+        paid_sum=int_value(sessions, "paid_sum")+int_value(sessions,"bonus_granted_sum"),
         spent_sum=int_value(sessions, "spent_sum"),
         customer_saved_sum=int_value(customer_saved, "amount_sum"),
         final_credit_sum=int_value(sessions, "final_credit_sum"),
@@ -1768,7 +1789,11 @@ def owner_reports_summary(
             "closed_sessions": int_value(sessions, "closed_count"),
             "cancelled_sessions": int_value(sessions, "cancelled_count"),
             "paid_sum": int_value(sessions, "paid_sum"),
-            "spent_sum": int_value(sessions, "spent_sum"),
+            "spent_sum": int_value(sessions, "spent_sum")-int_value(sessions,"bonus_spent_sum"),
+            "bonus_spent_sum": int_value(sessions,"bonus_spent_sum"),
+            "bonus_granted_sum": sum(payments_by_provider.get(provider,{}).get("bonus_sum",0) for provider in ("cash","click")),
+            "vip_virtual_spent_sum": int_value(sessions, "vip_virtual_spent_sum"),
+            "external_revenue_sum": sum(payments_by_provider.get(provider, {}).get("amount_sum", 0) for provider in ("cash", "click")),
             "final_credit_sum": int_value(sessions, "final_credit_sum"),
             "cash_sum": int_value(cash, "amount_sum"),
             "cash_pulses": int_value(cash, "pulse_count"),
@@ -1799,6 +1824,8 @@ def owner_reports_summary(
                 "mode": row["mode"],
                 "duration_ms": int(row["duration_ms"] or 0),
                 "spent_sum": int(row["spent_sum"] or 0),
+                "vip_virtual_spent_sum": int(row["vip_virtual_spent_sum"] or 0),
+                "bonus_spent_sum": int(row.get("bonus_spent_sum") or 0),
                 "pause_ms": int(row["pause_ms"] or 0),
                 "total_stop_wait_ms": int(row["total_stop_wait_ms"] or 0),
             }
@@ -1833,18 +1860,37 @@ def owner_reports_summary(
 
 @app.get("/api/kiosk/settings")
 def get_kiosk_settings() -> dict[str, object]:
+    from .contact_api import public_contacts
     with db() as conn:
         row = conn.execute(
             "SELECT setting_value FROM app_settings WHERE setting_key = 'kiosk_settings'",
         ).fetchone()
+        contacts = public_contacts(conn)
     config = normalize_kiosk_settings(row["setting_value"] if row else None)
-    return {"ok": True, "config": config, "source": "database" if row else "default"}
+    config["contacts"].update(contacts)
+    identity = get_license_settings()
+    return {"ok": True, "config": config, "source": "database" if row else "default", "station": {"postNo": identity["post_no"] if identity.get("site_code") else None}}
+
+
+@app.get("/api/kiosk/payment-options")
+def kiosk_payment_options() -> dict[str, object]:
+    config = get_click_settings()
+    ready = True
+    try:
+        require_click_ready(config)
+    except HTTPException:
+        ready = False
+    return {"ok": True, "click": {
+        "enabled": ready,
+        "minAmount": int(config["min_amount_sum"]),
+        "maxAmount": int(config["max_amount_sum"]),
+    }}
 
 
 @app.post("/api/kiosk/settings")
 def save_kiosk_settings(
     payload: KioskSettingsRequest,
-    user: Annotated[dict, Depends(require_role("owner", "admin"))],
+    user: Annotated[dict, Depends(require_role("owner"))],
 ) -> dict[str, object]:
     config = normalize_kiosk_settings(payload.config)
     with db() as conn:
@@ -1862,10 +1908,27 @@ def save_kiosk_settings(
     return {"ok": True, "config": config, "source": "database", "updated_by": user["login"]}
 
 
+@app.post("/api/owner/kiosk/appearance")
+def save_kiosk_appearance(payload: KioskSettingsRequest, user: Annotated[dict, Depends(require_role("owner"))]) -> dict[str, object]:
+    selection = payload.config.get("mode")
+    if selection not in ["auto", "dark", "light"]:
+        raise HTTPException(400, "Choose auto, dark or light")
+    with db() as conn:
+        row = conn.execute("SELECT setting_value FROM app_settings WHERE setting_key = 'kiosk_settings' FOR UPDATE").fetchone()
+        config = normalize_kiosk_settings(row["setting_value"] if row else None)
+        appearance = config["theme"]["appearance"]
+        appearance["mode"] = "auto" if selection == "auto" else "manual"
+        if selection != "auto":
+            appearance["manualTheme"] = selection
+        conn.execute("INSERT INTO app_settings (setting_key, setting_value, updated_at) VALUES ('kiosk_settings', %s, now()) ON CONFLICT (setting_key) DO UPDATE SET setting_value=EXCLUDED.setting_value, updated_at=now()", (Jsonb(config),))
+        conn.commit()
+    return {"ok": True, "appearance": appearance, "updated_by": user["login"]}
+
+
 @app.post("/api/kiosk/assets/upload")
 async def upload_kiosk_asset(
     kind: str,
-    user: Annotated[dict, Depends(require_role("owner", "admin"))],
+    user: Annotated[dict, Depends(require_role("owner"))],
     file: UploadFile = File(...),
 ) -> dict[str, object]:
     normalized_kind = kind.strip().lower()
@@ -1942,15 +2005,18 @@ def wash_select_mode(payload: WashModeRequest) -> dict[str, object]:
 
 
 @app.post("/api/wash/stop")
-def wash_stop() -> dict[str, object]:
-    return wash_runtime.stop_wash()
+def wash_stop(user: Annotated[dict, Depends(require_role("admin"))]) -> dict[str, object]:
+    # Financial STOP remains disabled until its remaining-credit policy is agreed.
+    # Physical OFF/WEB PAUSE uses the coordinated Admin service and preserves money.
+    raise HTTPException(409, "Финансовый STOP отключён. Используйте паузу или Admin all-off: остаток сохраняется.")
 
 
 @app.post("/api/wash/credit")
 def wash_add_credit(
     payload: WashCreditRequest,
-    user: Annotated[dict, Depends(require_role("owner", "admin"))],
+    user: Annotated[dict, Depends(require_role("admin"))],
 ) -> dict[str, object]:
+    require_simulation_enabled()
     return wash_runtime.add_credit(payload.amount_sum, payload.source)
 
 
@@ -2013,6 +2079,7 @@ def serialize_click_intent(row: dict) -> dict[str, object]:
         "merchant_trans_id": row.get("gateway_merchant_trans_id"),
         "amount_sum": int(row["amount_sum"] or 0),
         "status": row["status"],
+        "credit_destination": row.get("wallet_credit_destination") or "post",
         "gateway_status": row.get("gateway_status") or "",
         "payment_url": row.get("payment_url") or "",
         "last_error": row.get("last_error") or "",
@@ -2092,17 +2159,24 @@ def apply_click_credit_once(intent_id: UUID) -> dict | None:
         if not row or row["status"] not in {"paid", "credited"} or row["credited_at"]:
             conn.commit()
             return row
+        from .bonus import award
+        if row.get('bonus_sum') is None:
+            row=conn.execute('UPDATE click_payment_intents SET bonus_sum=%s WHERE id=%s RETURNING *',(award(int(row['amount_sum']),wash_runtime.params),intent_id)).fetchone()
         amount_sum = int(row["amount_sum"] or 0)
         gateway_id = str(row["gateway_intent_id"] or row["id"])
         raw_payload = dict(row.get("raw_payload") or {})
         conn.commit()
 
-    wash_runtime.add_credit(
-        amount_sum,
-        "click",
-        idempotency_key=f"click:{gateway_id}",
-        raw_payload={"source": "click", "gateway_intent_id": gateway_id, "intent": raw_payload},
-    )
+    from .wallet_payments import credit_confirmed
+    destination=credit_confirmed(wash_runtime,row) if wash_runtime.shared_wallet_enabled else None
+    if destination is None:
+        wash_runtime.add_credit(
+            amount_sum,
+            "click",
+            idempotency_key=f"click:{gateway_id}",
+            raw_payload={"source": "click", "gateway_intent_id": gateway_id, "intent": raw_payload},
+            bonus_sum=int(row.get("bonus_sum") or 0),
+        )
 
     with db() as conn:
         updated = conn.execute(
@@ -2110,11 +2184,12 @@ def apply_click_credit_once(intent_id: UUID) -> dict | None:
             UPDATE click_payment_intents
             SET status = 'credited',
                 credited_at = COALESCE(credited_at, now()),
+                wallet_credit_destination = %s,
                 updated_at = now()
             WHERE id = %s
             RETURNING *
             """,
-            (intent_id,),
+            (destination or "post",intent_id),
         ).fetchone()
         conn.commit()
     return updated
@@ -2585,6 +2660,11 @@ def reset_local_runtime_data(
         license_config = normalize_license_settings(clear_post_identity(current_license))
         click_config = normalize_click_settings(clear_post_identity(current_click))
 
+    with db() as conn:
+        shared=conn.execute("SELECT setting_value FROM app_settings WHERE setting_key='shared_wallet'").fetchone()
+    if shared and shared['setting_value'].get('enabled'):
+        raise HTTPException(409,"Сброс поста с общим кошельком требует отдельной процедуры сверки и отключения")
+
     tables = [
         "cash_pulse_batches",
         "wash_payments",
@@ -2660,7 +2740,7 @@ async def commissioning_status() -> dict[str, object]:
     public_click = get_click_settings(include_secret=False)
     try:
         io_health = await io_request("/health")
-        io_ready = bool(io_health.get("ok", True))
+        io_ready = io_health.get("modbus_ok") is True
     except HTTPException:
         io_ready = False
     return {
@@ -2697,6 +2777,8 @@ def commissioning_access(
 
 @app.post("/api/commissioning/claim")
 async def commissioning_claim(payload: CommissioningClaimRequest) -> dict[str, object]:
+    from .admin_service import require_idle
+    require_idle(wash_runtime)
     if get_commissioning_state().get("complete"):
         raise HTTPException(status.HTTP_409_CONFLICT, "Post commissioning is already complete")
     gateway_url = payload.gateway_url.strip().rstrip("/")
@@ -2772,6 +2854,8 @@ def commissioning_offline_request(payload: CommissioningOfflineRequest) -> JSONR
 
 @app.post("/api/commissioning/offline-response")
 async def commissioning_offline_response(file: UploadFile = File(...)) -> dict[str, object]:
+    from .admin_service import require_idle
+    require_idle(wash_runtime)
     if get_commissioning_state().get("complete"):
         raise HTTPException(status.HTTP_409_CONFLICT, "Post commissioning is already complete")
     content = await file.read(64 * 1024 + 1)
@@ -2805,6 +2889,8 @@ async def commissioning_offline_response(file: UploadFile = File(...)) -> dict[s
 
 @app.post("/api/commissioning/complete")
 async def commissioning_complete(payload: CommissioningCompleteRequest) -> dict[str, object]:
+    from .admin_service import require_idle
+    require_idle(wash_runtime)
     config = get_license_settings()
     hardware = get_hardware_identity(config)
     license_state = apply_license_to_runtime()
@@ -2814,7 +2900,7 @@ async def commissioning_complete(payload: CommissioningCompleteRequest) -> dict[
         io_health = await io_request("/health")
     except HTTPException as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, "Modbus I/O helper is not ready") from exc
-    if not io_health.get("ok", True):
+    if io_health.get("modbus_ok") is not True:
         raise HTTPException(status.HTTP_409_CONFLICT, "Modbus I/O helper is not ready")
     if not config.get("site_code") or not config.get("site_token"):
         raise HTTPException(status.HTTP_409_CONFLICT, "Post identity is not configured")
@@ -2881,6 +2967,7 @@ async def admin_install_apply(
     current_license = get_license_settings()
     current_click = get_click_settings()
     effective_site_token = resolve_site_token(site_token, current_license, current_click)
+    protect_shared_wallet_identity({'site_code':site_code,'post_no':payload.post_no,'site_token':effective_site_token})
     if payload.license_enabled and not effective_site_token:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Site token is required when license is enabled")
     if payload.click_enabled and not effective_site_token:
@@ -2966,6 +3053,7 @@ def admin_save_license_settings(
     next_config = normalize_license_settings(payload.model_dump())
     if not payload.site_token.strip() and current.get("site_token"):
         next_config["site_token"] = current["site_token"]
+    protect_shared_wallet_identity(next_config)
     if next_config.get("enabled"):
         missing = [key for key in ("gateway_url", "site_code", "site_token", "post_no") if not next_config.get(key)]
         if missing:
@@ -3051,13 +3139,15 @@ async def create_click_intent(payload: ClickIntentRequest) -> dict[str, object]:
                 """,
                 (active["id"],),
             )
+        from .wallet_payments import bind_new_intent
+        origin_session,origin_uid=bind_new_intent(wash_runtime)
         row = conn.execute(
             """
-            INSERT INTO click_payment_intents (id, amount_sum, status)
-            VALUES (%s, %s, 'local_pending')
+            INSERT INTO click_payment_intents (id, amount_sum, status,wallet_origin_session_id,wallet_origin_uid)
+            VALUES (%s, %s, 'local_pending',%s,%s)
             RETURNING *
             """,
-            (local_id, amount_sum),
+            (local_id, amount_sum,origin_session,origin_uid),
         ).fetchone()
         conn.commit()
 
@@ -3216,7 +3306,7 @@ async def get_click_intent(intent_id: UUID) -> dict[str, object]:
 
 @app.get("/api/owner/wash/parameters")
 def owner_wash_parameters(
-    user: Annotated[dict, Depends(require_role("owner", "admin"))],
+    user: Annotated[dict, Depends(require_role("owner"))],
 ) -> dict[str, object]:
     snapshot = wash_runtime.snapshot()
     return {"ok": True, "parameters": snapshot["parameters"]}
@@ -3225,9 +3315,13 @@ def owner_wash_parameters(
 @app.post("/api/owner/wash/parameters")
 def owner_save_wash_parameters(
     payload: WashParametersRequest,
-    user: Annotated[dict, Depends(require_role("owner", "admin"))],
+    user: Annotated[dict, Depends(require_role("owner"))],
 ) -> dict[str, object]:
-    return {"ok": True, "parameters": wash_runtime.save_parameters(payload.parameters), "updated_by": user["login"]}
+    try:
+        result=wash_runtime.save_parameters(payload.parameters)
+    except ValueError as exc:
+        raise HTTPException(422,str(exc)) from exc
+    return {"ok": True, "parameters": result, "updated_by": user["login"]}
 
 
 def serialize_vip_profile(row: dict) -> dict[str, object]:
@@ -3246,8 +3340,12 @@ def serialize_vip_profile(row: dict) -> dict[str, object]:
 
 @app.get("/api/owner/vip-profiles")
 def owner_vip_profiles(
-    user: Annotated[dict, Depends(require_role("owner", "admin"))],
+    user: Annotated[dict, Depends(require_role("owner"))],
 ) -> dict[str, object]:
+    if wash_runtime.shared_wallet_enabled:
+        from .wallet_registry import read_registry
+        from .wallet_api import registry_bridge
+        return {'ok':True,'profiles':registry_bridge(read_registry)['profiles']}
     with db() as conn:
         rows = conn.execute(
             """
@@ -3263,8 +3361,12 @@ def owner_vip_profiles(
 @app.post("/api/owner/vip-profiles")
 def owner_save_vip_profiles(
     payload: VipProfilesRequest,
-    user: Annotated[dict, Depends(require_role("owner", "admin"))],
+    user: Annotated[dict, Depends(require_role("owner"))],
 ) -> dict[str, object]:
+    if wash_runtime.shared_wallet_enabled:
+        from .wallet_registry import save_profiles
+        from .wallet_api import registry_bridge
+        return registry_bridge(save_profiles,payload,user)
     profiles = []
     seen_codes: set[str] = set()
     for item in payload.profiles:
@@ -3385,27 +3487,33 @@ def serialize_rfid_card(row: dict) -> dict[str, object]:
         "last_seen_at": row["last_seen_at"].isoformat() if row.get("last_seen_at") else None,
         "created_at": row["created_at"].isoformat() if row.get("created_at") else None,
         "updated_at": row["updated_at"].isoformat() if row.get("updated_at") else None,
+        "expires_at":row["expires_at"].isoformat() if row.get("expires_at") else None,
     }
 
 
 @app.get("/api/owner/rfid/latest")
 async def owner_rfid_latest(
-    user: Annotated[dict, Depends(require_role("owner", "admin"))],
+    user: Annotated[dict, Depends(require_role("owner"))],
 ) -> dict:
     return await io_request("/rfid/latest")
 
 
 @app.get("/api/owner/rfid/cards")
 def owner_rfid_cards(
-    user: Annotated[dict, Depends(require_role("owner", "admin"))],
+    user: Annotated[dict, Depends(require_role("owner"))],
     include_inactive: bool = False,
 ) -> dict[str, object]:
+    if wash_runtime.shared_wallet_enabled:
+        from .wallet_registry import read_registry
+        from .wallet_api import registry_bridge
+        rows=registry_bridge(read_registry)['cards']
+        return {'ok':True,'cards':[r for r in rows if include_inactive or (r['enabled'] and r['status']=='active')]}
     with db() as conn:
         rows = conn.execute(
             """
             SELECT c.uid, c.card_type, c.status, c.enabled, c.display_name,
                    c.balance_sum, c.vip_profile_id, c.last_seen_at,
-                   c.created_at, c.updated_at,
+                   c.created_at, c.updated_at, c.expires_at,
                    p.code AS vip_profile_code,
                    p.name AS vip_profile_name
             FROM rfid_cards c
@@ -3422,14 +3530,24 @@ def owner_rfid_cards(
 @app.post("/api/owner/rfid/cards")
 def owner_save_rfid_card(
     payload: RfidCardRequest,
-    user: Annotated[dict, Depends(require_role("owner", "admin"))],
+    user: Annotated[dict, Depends(require_role("owner"))],
 ) -> dict[str, object]:
+    if wash_runtime.shared_wallet_enabled:
+        from .wallet_registry import save_card
+        from .wallet_api import registry_bridge
+        return registry_bridge(save_card,payload,user)
     uid = payload.uid.strip().upper()
     if payload.card_type != "vip":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Owner can register only VIP cards")
     if not payload.vip_profile_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "VIP card requires VIP profile")
 
+    expiry=None
+    if payload.expires_at:
+        try:
+            expiry=datetime.fromisoformat(payload.expires_at)
+            if expiry.tzinfo is None:raise ValueError()
+        except ValueError:raise HTTPException(422,'Укажите срок действия VIP с часовым поясом') from None
     with db() as conn:
         if payload.vip_profile_id:
             profile = conn.execute(
@@ -3439,6 +3557,8 @@ def owner_save_rfid_card(
             if not profile:
                 raise HTTPException(status.HTTP_400_BAD_REQUEST, "VIP profile not found")
 
+        frozen=conn.execute("SELECT 1 FROM shared_wallet_vip_imports WHERE uid=%s AND status='pending'",(uid,)).fetchone()
+        if frozen:raise HTTPException(409,'VIP-источник заморожен для переноса: завершите установку и перенос в Owner')
         row = conn.execute(
             """
             INSERT INTO rfid_cards
@@ -3478,11 +3598,13 @@ def owner_save_rfid_card(
                 Jsonb({"uid": uid, "card_type": payload.card_type, "changed_by": user["login"]}),
             ),
         )
+        if 'expires_at' in payload.model_fields_set:
+            conn.execute('UPDATE rfid_cards SET expires_at=%s WHERE uid=%s',(expiry,uid))
         saved = conn.execute(
             """
             SELECT c.uid, c.card_type, c.status, c.enabled, c.display_name,
                    c.balance_sum, c.vip_profile_id, c.last_seen_at,
-                   c.created_at, c.updated_at,
+                   c.created_at, c.updated_at, c.expires_at,
                    p.code AS vip_profile_code,
                    p.name AS vip_profile_name
             FROM rfid_cards c
@@ -3499,8 +3621,12 @@ def owner_save_rfid_card(
 @app.delete("/api/owner/rfid/cards/{uid}")
 def owner_delete_rfid_card(
     uid: str,
-    user: Annotated[dict, Depends(require_role("owner", "admin"))],
+    user: Annotated[dict, Depends(require_role("owner"))],
 ) -> dict[str, object]:
+    if wash_runtime.shared_wallet_enabled:
+        from .wallet_registry import remove_card
+        from .wallet_api import registry_bridge
+        return registry_bridge(remove_card,uid,user)
     normalized_uid = uid.strip().upper()
     with db() as conn:
         current = conn.execute(
@@ -3549,6 +3675,11 @@ def owner_delete_rfid_card(
     return {"ok": True, "uid": normalized_uid, "deleted_by": user["login"]}
 
 
+def require_simulation_enabled():
+    if not settings.simulation_enabled:
+        raise HTTPException(403, "Симуляции отключены в рабочем режиме. Для DEMO используйте /preview/wash.")
+
+
 @app.get("/api/admin/wash/simulation")
 def admin_wash_simulation(
     user: Annotated[dict, Depends(require_role("admin"))],
@@ -3562,6 +3693,7 @@ def admin_wash_sim_total_stop(
     payload: WashSimTotalStopRequest,
     user: Annotated[dict, Depends(require_role("admin"))],
 ) -> dict[str, object]:
+    require_simulation_enabled()
     return wash_runtime.set_simulated_total_stop(payload.active)
 
 
@@ -3570,6 +3702,7 @@ def admin_wash_sim_coin_pulses(
     payload: WashSimPulsesRequest,
     user: Annotated[dict, Depends(require_role("admin"))],
 ) -> dict[str, object]:
+    require_simulation_enabled()
     return wash_runtime.add_simulated_coin_pulses(payload.count)
 
 
@@ -3578,6 +3711,7 @@ def admin_wash_sim_license(
     payload: WashSimLicenseRequest,
     user: Annotated[dict, Depends(require_role("admin"))],
 ) -> dict[str, object]:
+    require_simulation_enabled()
     wash_runtime.set_simulated_license(payload.mode)
     apply_license_to_runtime()
     return wash_runtime.snapshot()
@@ -3598,6 +3732,7 @@ async def admin_io_simulate_input(
     payload: WashSimTotalStopRequest,
     user: Annotated[dict, Depends(require_role("admin"))],
 ) -> dict:
+    require_simulation_enabled()
     if payload.active is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Simulated input state is required")
     return await io_request(
@@ -3613,6 +3748,7 @@ async def admin_io_simulate_pulses(
     payload: WashSimPulsesRequest,
     user: Annotated[dict, Depends(require_role("admin"))],
 ) -> dict:
+    require_simulation_enabled()
     return await io_request(
         f"/simulate/pulses/{name}",
         method="POST",
@@ -3625,6 +3761,7 @@ async def admin_io_simulate_rfid(
     payload: WashSimRfidRequest,
     user: Annotated[dict, Depends(require_role("admin"))],
 ) -> dict:
+    require_simulation_enabled()
     return await io_request("/simulate/rfid", method="POST", json={"uid": payload.uid})
 
 
@@ -3632,6 +3769,7 @@ async def admin_io_simulate_rfid(
 async def admin_io_simulate_reset(
     user: Annotated[dict, Depends(require_role("admin"))],
 ) -> dict:
+    require_simulation_enabled()
     wash_runtime.reset_simulation()
     return await io_request("/simulate/reset", method="POST")
 
@@ -3708,13 +3846,13 @@ async def sync_telegram_identity() -> None:
 
 
 @app.get("/api/owner/telegram-setup/status")
-async def owner_telegram_status(user: Annotated[dict, Depends(require_role("owner", "admin"))]) -> dict:
+async def owner_telegram_status(user: Annotated[dict, Depends(require_role("owner"))]) -> dict:
     return await telegram_setup_request("status")
 
 
 @app.post("/api/owner/telegram-setup/{action}")
 async def owner_telegram_action(action: Literal["configure-auto", "pairing", "disable", "discover"],
-    payload: dict, user: Annotated[dict, Depends(require_role("owner", "admin"))]) -> dict:
+    payload: dict, user: Annotated[dict, Depends(require_role("owner"))]) -> dict:
     if action in {"configure-auto", "discover"}:
         await sync_telegram_identity()
     if action == "discover":
@@ -3744,6 +3882,8 @@ async def start_telegram_identity_sync():
         while True:
             try:
                 await sync_telegram_identity()
+                from .wallet_telegram import sync as sync_shared_telegram
+                await sync_shared_telegram()
             except Exception:
                 # Reporting availability must never interrupt wash operation.
                 pass
@@ -3770,3 +3910,75 @@ async def owner_station_reports(
 
 from .admin_api import router as admin_router
 app.include_router(admin_router)
+
+from . import retention
+app.add_event_handler("startup", retention.start)
+
+# Shared wallet defaults to disabled until site commissioning.
+from .wallet_api import router as wallet_router, SetupRequest as WalletSetupRequest
+app.include_router(wallet_router)
+
+@app.get('/api/commissioning/wallet',dependencies=[Depends(commissioning_access)])
+def commissioning_wallet_status():
+    from .wallet_api import owner_status
+    return owner_status({'login':'installer'})
+
+@app.post('/api/commissioning/wallet',dependencies=[Depends(commissioning_access)])
+def commissioning_wallet_setup(payload:WalletSetupRequest):
+    from .wallet_api import setup
+    return setup(payload,{'login':'installer'})
+
+
+@app.get('/api/commissioning/network/{kind}',dependencies=[Depends(commissioning_access)])
+async def commissioning_network_read(kind: str):
+    if get_commissioning_state().get('complete') or kind not in ('status','wifi'):
+        raise HTTPException(403,'Network commissioning is closed')
+    from .admin_api import network_request
+    return await network_request('/'+kind)
+
+
+@app.post('/api/commissioning/network/{action}',dependencies=[Depends(commissioning_access)])
+async def commissioning_network_action(action:str,payload:dict):
+    if get_commissioning_state().get('complete') or action not in ('apply','confirm','rollback'):
+        raise HTTPException(403,'Network commissioning is closed')
+    from .admin_api import network_request
+    from .admin_service import require_idle
+    if action=='apply':require_idle(wash_runtime)
+    return await network_request('/'+action,'POST',payload)
+
+
+@app.get('/api/commissioning/telegram/status', dependencies=[Depends(commissioning_access)])
+async def commissioning_telegram_status():
+    if get_commissioning_state().get('complete'):
+        raise HTTPException(403, 'Post commissioning is already complete')
+    from .wallet_api import configuration
+    cfg = configuration()
+    primary = int(cfg['primary_post']) if cfg['enabled'] else 1
+    result = await telegram_setup_request('status')
+    return {**result, 'install_manage_allowed': int(get_license_settings().get('post_no') or 1) == primary, 'primary_post': primary}
+
+
+@app.post('/api/commissioning/telegram/{action}', dependencies=[Depends(commissioning_access)])
+async def commissioning_telegram_action(action: Literal['configure-auto', 'pairing', 'discover'], payload: dict):
+    from .admin_service import require_idle
+    if get_commissioning_state().get('complete'):
+        raise HTTPException(403, 'Post commissioning is already complete')
+    require_idle(wash_runtime)
+    config = get_license_settings()
+    if not config.get('site_code') or apply_license_to_runtime().get('locked'):
+        raise HTTPException(409, 'Activate the station first')
+    from .wallet_api import configuration
+    cfg = configuration()
+    primary = int(cfg['primary_post']) if cfg['enabled'] else 1
+    if int(config.get('post_no') or 1) != primary:
+        raise HTTPException(409, 'Telegram is managed on the primary station')
+    if action == 'configure-auto':
+        current = await telegram_setup_request('status')
+        if current.get('owner_paired'):
+            raise HTTPException(409, 'Bot replacement requires Owner sign-in')
+    if payload.get('reset_owner'):
+        raise HTTPException(409, 'Owner replacement requires Owner sign-in')
+    return await owner_telegram_action(action, payload, {})
+
+from .contact_api import router as contact_router
+app.include_router(contact_router)

@@ -46,7 +46,7 @@ class WashParametersRequest(BaseModel):
 
 
 class VipProfileRequest(BaseModel):
-    id: int | None = None
+    id: int | None = Field(default=None,ge=1)
     code: str = Field(min_length=1, max_length=40)
     name: str = Field(min_length=1, max_length=120)
     enabled: bool = True
@@ -66,6 +66,7 @@ class RfidCardRequest(BaseModel):
     enabled: bool = True
     display_name: str = Field(default="", max_length=120)
     vip_profile_id: int | None = None
+    expires_at: str | None = Field(default=None,max_length=80)
 
 
 class WashSimTotalStopRequest(BaseModel):
@@ -143,3 +144,13 @@ class CommissioningOfflineRequest(BaseModel):
 
 class CommissioningCompleteRequest(BaseModel):
     confirmation: str = Field(pattern="^READY$")
+
+
+from pydantic import ConfigDict
+class CustomerRequest(BaseModel):
+    model_config=ConfigDict(extra='forbid',strict=True)
+    uid:str=Field(pattern=r'^[0-9A-Fa-f]{4,64}$')
+    display_name:str=Field(default='',max_length=120)
+    enabled:bool=True
+    status:str=Field(default='active',pattern=r'^(active|blocked|lost|expired)$')
+    expected_revision:int=Field(ge=0)

@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     default_owner_password: str
     default_admin_login: str = "admin"
     default_admin_password: str
+    simulation_enabled: bool = False
     io_helper_url: str = "http://io-helper:8080"
     click_gateway_url: str = "https://gateway.example.com"
     click_site_code: str = ""

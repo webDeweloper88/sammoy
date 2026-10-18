@@ -1,3 +1,10 @@
+> **Текущий статус всей системы (16 октября 2026):**
+> [что готово, где остановились и что дальше](project-status-2026-10-16.md).
+> Нижние handoff-разделы сохранены исторически. Периферия уже подключена;
+> аппаратная приёмка продолжается, а не начинается разработка Owner/UI заново.
+
+> Актуальный аудит от 2026-10-07: [сравнение и подтверждённые проблемы](sammoy2-audit-2026-10-07.md), [план реализации](implementation-roadmap.md). Ниже сохранён исторический handoff. Указание watchdog в YAML не подтверждает его реализацию в текущем Radxa io-helper; см. A-01/A-02. Актуальная ориентация интерфейса — 1080×1920.
+
 # SAMMOY 2.0 — Codex Handoff / Project README
 
 > **Purpose of this file**
@@ -1356,3 +1363,54 @@ were OFF, and PN532 stayed online. The existing remaining credit was not reset.
 `/install` now prevents UI activation while credit remains. Actual activation is
 still pending: the operator must supply the genuine server/code or signed response,
 and complete the current session according to the agreed money-handling rules.
+
+## 31. Admin UI — 2026-10-02
+
+Admin now opens `/admin/diagnostics`, with Connection and Maintenance pages.
+See [Admin operation and verification](admin.md). Wi-Fi/static IPv4 use the host
+NetworkManager service and a 90-second confirmation/rollback checkpoint. Network
+settings were not changed during development. Relay tests are finite, confirmed
+and blocked by unfinished customer sessions; all-off follows current WEB PAUSE.
+`wash_logic.py` remains unchanged (SHA256
+`8b05dd9b9d0a8694f0e3f8609393043137af47ea006b2e57c7e251889e5fbecb`).
+
+87 isolated tests and all four browser suites passed. Physical hardware acceptance
+remains outstanding: the user confirmed USB–RS485 cannot be connected now,
+`/dev/ttyUSB0` is missing, and io-helper is stopped. Do not describe hardware as
+ONLINE or production-ready based on UI tests. The customer main screen is still
+a separate next stage. On restart the existing timeout policy moved session 8
+to recovery_credits: id 1, 1744 sum, unclaimed. Current session balance is 0;
+the money remains recorded in the saved-remainders table. No manual money reset
+or change to recovery rules was made.
+
+## 32. Admin separation and retention — 2026-10-03
+
+Admin navigation now contains Diagnostics, Connection, License, Click, Maintenance
+and Account. Owner business pages and their mutation APIs are Owner-only. A direct
+Admin attempt to open an Owner page redirects to Admin diagnostics; API requests
+receive 403. Account/password management remains available independently to both.
+
+License details include decisions, binding, expiry, last/next synchronization and
+offline grace. Connection shows board/microSD identity and fingerprint. Click has
+status filters and cursor pagination. RFID diagnostics retain the last processing
+result even when subsequent reader heartbeats arrive.
+
+The agreed storage policy is implemented: financial history 12 calendar months,
+events 1 calendar month, bounded monthly technical logs. Card balances and unclaimed
+credit do not expire. See [storage policy and deployment](storage.md). The old
+90-day deletion is disabled; retention runs independently of the wash loop.
+Only retention plumbing and RFID diagnostic fields changed in wash_logic.py;
+pause/trigger, tariff and money-handling branches were not modified.
+
+Deployment completed: web UI is available at http://10.10.10.8/login; financial
+checksums matched across all eight tables, including the preserved 1744 sum.
+The first retention run succeeded. io-helper remains unstarted because the
+USB–RS485 adapter is absent; its new image and logging configuration are prepared.
+
+## 33. Customer Screen 2 (portrait)
+
+The customer interface is now available at `/` and `/wash`, with the real 3-minute idle screen integrated. Screen 2 uses real Vue/CSS/SVG components, six main radial programs plus independently configurable air/vacuum below (user-approved layout), UZ/KZ/KY/RU, server-derived time and the existing Click/cash/wash-card workflows. See [wash-screen.md](wash-screen.md) for files, sources of state, palette/sizing, verification and physical commissioning limits. Billing, shared free-pause budget and physical-trigger interlock logic are unchanged by this UI integration.
+
+## 34. Daylight / dark customer appearance
+
+Customer working screen and dialogs support the approved light palette. Owner → Wash screen selects Auto by Tashkent time (default light 08:00–18:00, adjustable) or Manual with a permanent Light/Dark choice. Settings are stored in `kiosk_settings.theme.appearance`; a customer page applies saved changes within its 15-second settings refresh and changes at schedule boundaries without a reload or equipment command. See [wash-screen.md](wash-screen.md).

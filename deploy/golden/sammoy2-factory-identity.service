@@ -1,0 +1,13 @@
+[Unit]
+Description=LABRIX unique identity on golden-image first boot
+After=local-fs.target
+Before=docker.service ssh.service ssh.socket
+ConditionPathExists=/var/lib/sammoy2/factory-pending
+
+[Service]
+Type=oneshot
+ExecStart=/opt/sammoy/sammoy2/deploy/golden/first-boot.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

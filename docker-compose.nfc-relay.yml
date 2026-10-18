@@ -1,0 +1,5 @@
+# Real Modbus and PN532. GPIO listener is explicitly disabled until NV9 is wired.
+services:
+  io-helper:
+    volumes:
+      - ./config/io-map.nfc-relay.yaml:/config/io-map.yaml:ro

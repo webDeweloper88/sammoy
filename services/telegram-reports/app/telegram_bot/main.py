@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sqlite3
 from contextlib import suppress
 from datetime import datetime, time
@@ -199,6 +200,19 @@ async def automatic_daily_report(bot: Bot, scheduled_at: time) -> None:
             and store.state(state_key) != today
         ):
             try:
+                # Claim the automatic send before talking to Telegram. A lost
+                # delivery/claim response is not automatically re-sent by a
+                # promoted primary. Manual report requests remain available.
+                key=os.environ.get('TELEGRAM_SETUP_KEY','')
+                if key:
+                    async with httpx.AsyncClient(timeout=12) as client:
+                        claim=await client.post(settings.wash_engine_url.rstrip('/')+'/api/wallet/report-claim',
+                            headers={'Authorization':'Bearer '+key},json={'day':today})
+                    claim.raise_for_status()
+                    if not claim.json().get('allowed'):
+                        store.set_state(state_key,today)
+                        await asyncio.sleep(max(10,settings.automatic_report_poll_seconds))
+                        continue
                 report = await fetch_aggregate("daily", refresh=True)
                 await bot.send_message(
                     int(owner["telegram_user_id"]),

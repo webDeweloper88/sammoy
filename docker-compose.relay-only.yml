@@ -1,0 +1,8 @@
+# Explicit bench profile for a real relay board without NFC or bill acceptor.
+services:
+  io-helper:
+    devices: !override
+      - /dev/gpiochip0:/dev/gpiochip0
+      - /dev/ttyUSB0:/dev/ttyUSB0
+    volumes:
+      - ./config/io-map.relay-only.yaml:/config/io-map.yaml:ro

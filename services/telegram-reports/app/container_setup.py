@@ -48,7 +48,7 @@ def active(name):
     return 'RUNNING' in p.stdout
 def public_status():
     env=read_env(); owner=PairingStore(DATA_PATH).owner()
-    return {'ok':True,'available':True,'configured':bool(env.get('TELEGRAM_BOT_TOKEN')),'enabled':env.get('TELEGRAM_ENABLED')=='true' and active('bot'),'bot_username':env.get('TELEGRAM_BOT_USERNAME',''),'owner_paired':owner is not None,'owner_name':(owner['telegram_first_name'] or owner['telegram_username'] or '') if owner else '', 'configured_posts':len(posts()),'identity_configured':env.get('SITE_ID') not in ('','UNCONFIGURED',None),'posts':[{'id':p['id'],'name':p['name'],'host':p['host']} for p in posts()]}
+    return {'ok':True,'available':True,'configured':bool(env.get('TELEGRAM_BOT_TOKEN')),'enabled':env.get('TELEGRAM_ENABLED')=='true' and env.get('TELEGRAM_LEADER','true')=='true' and active('bot'),'bot_username':env.get('TELEGRAM_BOT_USERNAME',''),'owner_paired':owner is not None,'leader':env.get('TELEGRAM_LEADER','true')=='true','primary_post':int(env.get('REPORT_PRIMARY_POST') or 1), 'owner_name':(owner['telegram_first_name'] or owner['telegram_username'] or '') if owner else '', 'configured_posts':len(posts()),'identity_configured':env.get('SITE_ID') not in ('','UNCONFIGURED',None),'posts':[{'id':p['id'],'name':p['name'],'host':p['host']} for p in posts()]}
 @app.get('/status')
 def status(): return public_status()
 class Identity(BaseModel):
@@ -74,7 +74,7 @@ async def configure(payload:Configure):
     async with LOCK:
         env=read_env()
         if env.get('SITE_ID') in ('UNCONFIGURED','',None):raise HTTPException(409,'Сначала настройте мойку и номер поста через установку поста')
-        if env.get('POST_ID')!='POST-01':raise HTTPException(409,'Telegram подключается на посте 1')
+        if env.get('POST_ID')!=f"POST-{int(env.get('REPORT_PRIMARY_POST') or 1):02d}":raise HTTPException(409,'Telegram подключается на текущем главном посту')
         try:
             async with httpx.AsyncClient(timeout=10) as client:r=await client.get(f'https://api.telegram.org/bot{token}/getMe')
             result=r.json().get('result',{})
@@ -106,7 +106,7 @@ async def discover(payload: dict = None):
     async with LOCK:
         env=read_env();site=env.get('SITE_ID');key=env.get('SITE_REPORT_API_KEY')
         if site in ('UNCONFIGURED','',None):raise HTTPException(409,'Сначала настройте мойку и номер поста через установку поста')
-        if env.get('POST_ID')!='POST-01':raise HTTPException(409,'Поиск постов выполняется на посте 1')
+        if env.get('POST_ID')!=f"POST-{int(env.get('REPORT_PRIMARY_POST') or 1):02d}":raise HTTPException(409,'Поиск постов выполняется на посте 1')
         try:network=ipaddress.ip_network((payload or {}).get('cidr') or os.environ.get('REPORT_LAN_CIDR',''),strict=False)
         except ValueError:raise HTTPException(503,'LAN is not configured; rerun deploy/install-reports.py')
         if network.version!=4 or not network.is_private or network.is_loopback or network.num_addresses>256:raise HTTPException(409,'Automatic discovery supports IPv4 /24 or smaller LANs')
@@ -146,3 +146,54 @@ async def aggregate(period: str, value: str):
             r.raise_for_status()
             return r.json()
     except (httpx.HTTPError,ValueError):raise HTTPException(503,'Report hub is unavailable') from None
+
+
+class Leadership(BaseModel):
+    active:bool
+    primary_post:int=Field(ge=1,le=100)
+
+@app.post('/leadership')
+async def leadership(payload:Leadership):
+    async with LOCK:
+        updates={'TELEGRAM_LEADER':'true' if payload.active else 'false','REPORT_PRIMARY_POST':str(payload.primary_post)}
+        old=read_env()
+        if any(old.get(k)!=v for k,v in updates.items()):
+            write_env(updates);await asyncio.to_thread(control,'restart','bot')
+    return {'ok':True,'leader':payload.active}
+
+@app.get('/backup/export')
+def export_backup():
+    env=read_env();store=PairingStore(DATA_PATH)
+    with store.connect() as conn:
+        owner=conn.execute('SELECT * FROM telegram_owner WHERE id=1').fetchone()
+        notifications=[dict(row) for row in conn.execute('SELECT key,value,updated_at FROM notification_state ORDER BY key')]
+    keys=('TELEGRAM_BOT_TOKEN','TELEGRAM_BOT_USERNAME','TELEGRAM_ENABLED')
+    return {'version':1,'site_id':env.get('SITE_ID'),'env':{k:env.get(k,'') for k in keys},
+            'owner':dict(owner) if owner else None,'notification_state':notifications,'posts':posts()}
+
+@app.post('/backup/import')
+async def import_backup(payload:dict):
+    async with LOCK:
+        env=read_env()
+        if payload.get('version')!=1 or payload.get('site_id')!=env.get('SITE_ID'):
+            raise HTTPException(409,'Report backup belongs to another site/version')
+        values=payload.get('env') or {}
+        values={k:str(values.get(k,'')) for k in ('TELEGRAM_BOT_TOKEN','TELEGRAM_BOT_USERNAME','TELEGRAM_ENABLED')}
+        store=PairingStore(DATA_PATH)
+        owner=payload.get('owner')
+        with store.connect() as conn:
+            conn.execute('DELETE FROM telegram_owner')
+            if owner:
+                conn.execute('INSERT INTO telegram_owner(id,telegram_user_id,telegram_username,telegram_first_name,paired_at,revoked_at,is_active) VALUES(1,?,?,?,?,?,?)',
+                    (owner['telegram_user_id'],owner.get('telegram_username'),owner.get('telegram_first_name'),owner['paired_at'],owner.get('revoked_at'),owner['is_active']))
+            conn.execute('DELETE FROM notification_state')
+            for row in payload.get('notification_state',[]):
+                conn.execute('INSERT INTO notification_state(key,value,updated_at) VALUES(?,?,?)',(row['key'],row['value'],row['updated_at']))
+        write_env(values)
+        if payload.get('posts'):
+            write_posts(env['SITE_ID'],env.get('SITE_NAME',env['SITE_ID']),payload['posts'])
+        await asyncio.to_thread(control,'restart','hub','bot')
+    return {'ok':True}
+
+from app.operator_notifications import register as register_operator_calls
+register_operator_calls(app,read_env,DATA_PATH,PairingStore)

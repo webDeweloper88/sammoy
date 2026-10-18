@@ -33,13 +33,13 @@ def validate(payload):
         prefix=int(payload.get('prefix',24))
         if not 8<=prefix<=30:raise ValueError('Prefix must be between 8 and 30')
         address=ipaddress.IPv4Interface(str(payload.get('address',''))+'/'+str(prefix))
-        gateway=ipaddress.IPv4Address(payload.get('gateway',''))
+        gateway=ipaddress.IPv4Address(payload['gateway']) if payload.get('gateway') else None
         if not address.ip.is_private or address.ip.is_loopback or address.ip.is_link_local:raise ValueError('Use a LAN IPv4 address')
-        if gateway not in address.network or gateway in (address.network.network_address,address.network.broadcast_address,address.ip):raise ValueError('Gateway must be a different host in the same subnet')
+        if gateway is not None and (gateway not in address.network or gateway in (address.network.network_address,address.network.broadcast_address,address.ip)):raise ValueError('Gateway must be a different host in the same subnet')
         if address.ip in (address.network.network_address,address.network.broadcast_address):raise ValueError('Network and broadcast addresses cannot be assigned')
-        dns=payload.get('dns') or [str(gateway)]
+        dns=payload.get('dns') or ([str(gateway)] if gateway else [])
         if not isinstance(dns,list) or len(dns)>2:raise ValueError('Specify at most two DNS servers')
-        result.update(address=str(address.ip),prefix=prefix,gateway=str(gateway),dns=[str(ipaddress.IPv4Address(x)) for x in dns])
+        result.update(address=str(address.ip),prefix=prefix,gateway=str(gateway) if gateway else '',dns=[str(ipaddress.IPv4Address(x)) for x in dns])
     if interface=='wlan0':
         ssid=str(payload.get('ssid',''));password=str(payload.get('password',''));security=payload.get('security','wpa-psk')
         if not 1<=len(ssid.encode())<=32 or any(ord(x)<32 for x in ssid):raise ValueError('Invalid Wi-Fi name')
@@ -120,10 +120,11 @@ class Network:
         if list(self.props(ROOT,NM).get('Checkpoints',[])):raise NetworkError('NetworkManager already has a pending checkpoint')
         device=self.nm.GetDeviceByIpIface(config['interface'])
         # A checkpoint belongs to this physical device, never Docker bridges.
+        expires_at=time.time()+90
         checkpoint=self.nm.CheckpointCreate(dbus.Array([device],signature='o'),dbus.UInt32(90),dbus.UInt32(2))
         try:
             connection,active,_=self.nm.AddAndActivateConnection2(connection_settings(config),device,dbus.ObjectPath('/'),dbus.Dictionary({'persist':'memory'},signature='sv'))
-            pending={'id':str(uuid.uuid4()),'checkpoint':str(checkpoint),'connection':str(connection),'active':str(active),'device':str(device),'interface':config['interface'],'expires_at':time.time()+90}
+            pending={'id':str(uuid.uuid4()),'checkpoint':str(checkpoint),'connection':str(connection),'active':str(active),'device':str(device),'interface':config['interface'],'expires_at':expires_at}
             self.save_pending(pending)
         except Exception:
             self.nm.CheckpointRollback(checkpoint)

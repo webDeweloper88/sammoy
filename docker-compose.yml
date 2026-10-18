@@ -1,9 +1,15 @@
+x-service-logging: &service-logging
+  driver: journald
+  options:
+    tag: "{{.Name}}"
+
 services:
 
   postgres:
     image: postgres:16-alpine
     container_name: sammoy2-postgres
     restart: unless-stopped
+    logging: *service-logging
 
     environment:
       TZ: Asia/Tashkent
@@ -37,6 +43,7 @@ services:
     image: sammoy2-io-helper:latest
     container_name: sammoy2-io-helper
     restart: unless-stopped
+    logging: *service-logging
 
     environment:
       TZ: Asia/Tashkent
@@ -44,6 +51,7 @@ services:
 
     volumes:
       - ./config/io-map.yaml:/config/io-map.yaml:ro
+      - ./data/io-helper:/var/lib/sammoy-io
 
     devices:
       - /dev/gpiochip0:/dev/gpiochip0
@@ -75,6 +83,7 @@ services:
     image: sammoy2-wash-engine:latest
     container_name: sammoy2-wash-engine
     restart: unless-stopped
+    logging: *service-logging
 
     environment:
       TZ: Asia/Tashkent
@@ -96,10 +105,13 @@ services:
       TELEGRAM_SETUP_URL: http://telegram-reports:8076
       TELEGRAM_SETUP_KEY: ${TELEGRAM_SETUP_KEY:-}
 
+      WASH_ENGINE_SIMULATION_ENABLED: "false"
+
       WASH_ENGINE_IO_HELPER_URL: http://io-helper:8080
 
       WASH_ENGINE_CLICK_ENABLED: "false"
       WASH_ENGINE_LICENSE_ENABLED: "false"
+      WASH_ENGINE_LICENSE_GATEWAY_URL: ${WASH_ENGINE_LICENSE_GATEWAY_URL:-https://pay.labrix.uz}
 
       WASH_ENGINE_KIOSK_ASSETS_DIR: /var/lib/rtu-wash/kiosk-assets
 
@@ -138,6 +150,7 @@ services:
     image: sammoy2-telegram-reports:latest
     container_name: sammoy2-telegram-reports
     restart: unless-stopped
+    logging: *service-logging
     environment:
       TZ: Asia/Tashkent
       TELEGRAM_SETUP_KEY: ${TELEGRAM_SETUP_KEY:-}
@@ -166,13 +179,15 @@ services:
     image: sammoy2-kiosk-ui:latest
     container_name: sammoy2-kiosk-ui
     restart: unless-stopped
+    logging: *service-logging
     ports:
       - "127.0.0.1:8081:80"
+      - "0.0.0.0:80:80"
     depends_on:
       wash-engine:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null", "http://127.0.0.1/"]
       interval: 30s
       timeout: 5s
       retries: 5

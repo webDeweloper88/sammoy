@@ -1,0 +1,18 @@
+[Unit]
+Description=LABRIX application stack
+Requires=docker.service
+After=docker.service network-online.target sammoy2-factory-identity.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/sammoy/sammoy2
+ExecStart=/opt/sammoy/sammoy2/deploy/start-post.sh
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=240
+
+[Install]
+WantedBy=multi-user.target

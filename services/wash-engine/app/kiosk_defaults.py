@@ -1,4 +1,5 @@
 from copy import deepcopy
+import re
 from typing import Any
 
 
@@ -28,6 +29,8 @@ DEFAULT_KIOSK_SETTINGS: dict[str, Any] = {
         "logoUrl": "",
     },
     "theme": {
+        "design": "wheel",
+        "appearance": {"mode": "auto", "manualTheme": "dark", "lightStart": "08:00", "lightEnd": "18:00", "timezone": "Asia/Tashkent"},
         "id": "rtu-wash-classic",
         "preset": "rtu-wash-classic",
         "typography": {
@@ -244,6 +247,8 @@ DEFAULT_KIOSK_SETTINGS: dict[str, Any] = {
     ],
     "contacts": {
         "serviceSite": "support.example.com",
+        "supportPhone": "+998 91 111 69 29",
+        "socialLinks": {"telegram": "", "instagram": "", "youtube": ""},
         "footerCompany": "© 2025-2026 RTU WASH",
     },
     "layout": {
@@ -270,6 +275,21 @@ def deep_merge(base: Any, override: Any) -> Any:
 
 def normalize_kiosk_settings(value: dict[str, Any] | None) -> dict[str, Any]:
     settings = deep_merge(DEFAULT_KIOSK_SETTINGS, value or {})
+    theme = settings.get("theme")
+    if not isinstance(theme, dict):
+        theme = settings["theme"] = deepcopy(DEFAULT_KIOSK_SETTINGS["theme"])
+    theme["design"] = theme.get("design") if theme.get("design") in ("wheel", "cards") else "wheel"
+    defaults = DEFAULT_KIOSK_SETTINGS["theme"]["appearance"]
+    appearance = theme.get("appearance")
+    if not isinstance(appearance, dict):
+        appearance = {}
+    theme["appearance"] = {
+        "mode": appearance.get("mode") if appearance.get("mode") in ["manual", "auto"] else "auto",
+        "manualTheme": appearance.get("manualTheme") if appearance.get("manualTheme") in ["light", "dark"] else "dark",
+        "lightStart": appearance.get("lightStart") if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", str(appearance.get("lightStart", ""))) else defaults["lightStart"],
+        "lightEnd": appearance.get("lightEnd") if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", str(appearance.get("lightEnd", ""))) else defaults["lightEnd"],
+        "timezone": "Asia/Tashkent",
+    }
     layout = settings.setdefault("layout", {})
     layout.pop("showTemperature", None)
     layout.pop("temperatureText", None)
@@ -281,7 +301,7 @@ def normalize_kiosk_settings(value: dict[str, Any] | None) -> dict[str, Any]:
     contacts.pop("instagramUrl", None)
     contacts.pop("bonusUrl", None)
     contacts.pop("serviceUrl", None)
-    contacts.pop("supportPhone", None)
+
 
     texts = settings.setdefault("texts", {})
     for language in KIOSK_LANGUAGES:

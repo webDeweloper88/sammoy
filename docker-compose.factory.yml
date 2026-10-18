@@ -1,0 +1,9 @@
+# Factory preparation without peripheral devices. Hardware is NOT simulated.
+# docker compose -f docker-compose.yml -f docker-compose.factory.yml up -d
+services:
+  io-helper:
+    profiles: [hardware]
+  wash-engine:
+    depends_on: !override
+      postgres:
+        condition: service_healthy

@@ -1,0 +1,11 @@
+[Unit]
+Description=Attempt verified SAMMOY2 backup hourly while post idle
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5min
+Persistent=true
+Unit=sammoy2-backup.service
+
+[Install]
+WantedBy=timers.target

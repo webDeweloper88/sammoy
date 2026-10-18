@@ -1,0 +1,10 @@
+[Unit]
+Description=SAMMOY2 monthly technical log retention
+After=systemd-journald.service docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/sammoy/sammoy2/deploy/log-retention.py
+TimeoutStartSec=180
+Nice=10
+IOSchedulingClass=idle

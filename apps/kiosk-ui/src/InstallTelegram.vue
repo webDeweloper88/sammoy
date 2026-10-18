@@ -1,0 +1,17 @@
+<script setup>
+import {ref,onMounted,onUnmounted} from 'vue'
+import {api} from './api'
+const emit=defineEmits(['busy'])
+let timer,stopped=false
+const props=defineProps({language:String})
+const tr=(ru,uz,en)=>({ru,uz,en}[props.language]||ru)
+const state=ref(null),token=ref(''),pairing=ref(null),busy=ref(false),error=ref('')
+const request=(action,payload)=>api('/api/commissioning/telegram/'+action,payload?{method:'POST',body:JSON.stringify(payload)}:{})
+async function load(){state.value=await request('status');if(state.value.owner_paired)pairing.value=null}
+async function run(fn){if(busy.value)return;busy.value=true;emit('busy',true);error.value='';try{await fn()}catch(e){error.value=e.message}finally{busy.value=false;emit('busy',false)}}
+async function configure(){state.value=await request('configure-auto',{token:token.value});token.value='';pairing.value=null}
+onMounted(()=>{run(load);timer=setInterval(()=>{if(pairing.value&&!busy.value&&!stopped)run(load)},5000)})
+onUnmounted(()=>{stopped=true;clearInterval(timer);token.value='';emit('busy',false)})
+</script>
+<template><section class="card content"><h2>Telegram</h2><p>{{tr('Необязательный шаг. Подключите бота на главном посте или позже в Owner.','Ixtiyoriy bosqich. Botni asosiy postda yoki keyin Owner orqali ulang.','Optional. Connect the bot on the primary station or later in Owner.')}}</p><p v-if="error" class="message error" role="alert">{{error}}</p><template v-if="state"><p>{{state.configured?'@'+state.bot_username:tr('Бот не подключён','Bot ulanmagan','Bot not connected')}} · {{state.owner_paired?tr('Владелец привязан','Egasi ulangan','Owner paired'):tr('Владелец не привязан','Egasi ulanmagan','Owner not paired')}}</p><p v-if="state.install_manage_allowed===false" class="muted">{{tr('Telegram настраивается на главном посте.','Telegram asosiy postda sozlanadi.','Configure Telegram on the primary station.')}} {{state.primary_post}}</p><form v-if="state.install_manage_allowed!==false" @submit.prevent="run(configure)"><label>BotFather token<input v-model="token" type="password" required autocomplete="off" maxlength="256"/></label><div class="actions"><button class="primary" :disabled="busy||!token||state.owner_paired">{{tr('Проверить и подключить','Tekshirish va ulash','Verify & connect')}}</button><button type="button" class="quiet" :disabled="busy||!state.enabled||state.owner_paired" @click="run(async()=>{pairing=await request('pairing',{reset_owner:false})})">{{tr('Привязать владельца','Egasini ulash','Pair owner')}}</button><button type="button" class="quiet" :disabled="busy||!state.identity_configured" @click="run(async()=>{await request('discover',{});await load()})">{{tr('Найти посты автоматически','Postlarni avtomatik topish','Discover stations')}}</button><button type="button" class="quiet" :disabled="busy" @click="run(load)">{{tr('Обновить статус','Holatni yangilash','Refresh status')}}</button></div></form><div v-if="pairing"><p>{{tr('Отсканируйте QR и нажмите Start в Telegram.','QRni skanerlang va Telegramda Start bosing.','Scan the QR and press Start in Telegram.')}}</p><img :src="pairing.qr_data_url" alt="Telegram QR" width="256" height="256"/></div><p v-for="post in state.posts||[]" :key="post.id">{{post.name}} · {{post.host}}</p></template></section></template>
+<style scoped>label{display:grid;gap:12px}.actions{display:flex;flex-wrap:wrap;gap:12px;margin-top:24px}p{line-height:1.6}</style>
