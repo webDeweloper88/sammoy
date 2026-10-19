@@ -1135,11 +1135,11 @@ def evaluate_license_lock(row: dict | None, config: dict[str, object] | None = N
     locked = False
     state = "valid"
     reason = "license valid"
-    if row.get("state") in {"settings_incomplete", "sync_failed"} and not row.get("last_success_at"):
+    if not row.get("last_success_at"):
         locked = True
-        state = row.get("state")
-        reason = row.get("reason") or row.get("last_error") or state
-    elif not row.get("enabled"):
+        state = row.get("state") if row.get("state") in {"settings_incomplete", "sync_failed"} else "sync_failed"
+        reason = "license requires successful activation"
+    elif not row.get("enabled") or (row.get("raw_payload") or {}).get("locked") is True:
         locked = True
         state = "disabled"
         reason = row.get("reason") or "license disabled by gateway"
@@ -1147,13 +1147,9 @@ def evaluate_license_lock(row: dict | None, config: dict[str, object] | None = N
         locked = True
         state = "expired"
         reason = "license expired"
-    elif row.get("last_success_at") and grace_until and grace_until < now:
-        locked = True
-        state = "grace_expired"
-        reason = "license sync grace expired"
-    elif row.get("last_error") and row.get("last_success_at"):
+    elif row.get("last_error") or (grace_until and grace_until < now):
         state = "grace"
-        reason = "using cached license during gateway outage"
+        reason = "using validated cached license; offline operation does not extend license expiry"
     result = dict(row)
     result["locked"] = locked
     result["state"] = state
@@ -1795,7 +1791,7 @@ def owner_reports_summary(
             "vip_virtual_spent_sum": int_value(sessions, "vip_virtual_spent_sum"),
             "external_revenue_sum": sum(payments_by_provider.get(provider, {}).get("amount_sum", 0) for provider in ("cash", "click")),
             "final_credit_sum": int_value(sessions, "final_credit_sum"),
-            "cash_sum": int_value(cash, "amount_sum"),
+            "cash_sum": payments_by_provider.get("cash", {}).get("amount_sum", 0),
             "cash_pulses": int_value(cash, "pulse_count"),
             "cash_payment_count": payments_by_provider.get("cash", {}).get("count", 0),
             "click_sum": payments_by_provider.get("click", {}).get("amount_sum", 0),
@@ -1867,6 +1863,9 @@ def get_kiosk_settings() -> dict[str, object]:
         ).fetchone()
         contacts = public_contacts(conn)
     config = normalize_kiosk_settings(row["setting_value"] if row else None)
+    if wash_runtime.device_type=="dry_fog":
+        from .device_setup import fog_kiosk_config
+        config=fog_kiosk_config(config)
     config["contacts"].update(contacts)
     identity = get_license_settings()
     return {"ok": True, "config": config, "source": "database" if row else "default", "station": {"postNo": identity["post_no"] if identity.get("site_code") else None}}
@@ -2746,6 +2745,7 @@ async def commissioning_status() -> dict[str, object]:
     return {
         "ok": True,
         "commissioning": get_commissioning_state(),
+        "device": local_status(),
         "network": get_host_network_summary(),
         "hardware": get_hardware_identity(public_license),
         "io_ready": io_ready,
@@ -2906,6 +2906,9 @@ async def commissioning_complete(payload: CommissioningCompleteRequest) -> dict[
         raise HTTPException(status.HTTP_409_CONFLICT, "Post identity is not configured")
     if license_state.get("locked"):
         raise HTTPException(status.HTTP_409_CONFLICT, f"License is locked: {license_state.get('reason')}")
+    from .device_setup import local_status
+    device=local_status()
+    if device["active_type"]!=device["requested"]["type"]:raise HTTPException(409,"Примените профиль оборудования перед завершением установки")
     completed_at = datetime.now(UTC).isoformat()
     with db() as conn:
         conn.execute(
@@ -3847,12 +3850,19 @@ async def sync_telegram_identity() -> None:
 
 @app.get("/api/owner/telegram-setup/status")
 async def owner_telegram_status(user: Annotated[dict, Depends(require_role("owner"))]) -> dict:
-    return await telegram_setup_request("status")
+    from .wallet_api import configuration
+    cfg=configuration()
+    result=await telegram_setup_request("status")
+    return {**result,'manage_allowed':not cfg['enabled'] or cfg['local_post']==cfg['primary_post'],'primary_post':cfg['primary_post']}
 
 
 @app.post("/api/owner/telegram-setup/{action}")
 async def owner_telegram_action(action: Literal["configure-auto", "pairing", "disable", "discover"],
     payload: dict, user: Annotated[dict, Depends(require_role("owner"))]) -> dict:
+    from .wallet_api import configuration
+    cfg=configuration()
+    if cfg['enabled'] and cfg['local_post']!=cfg['primary_post']:
+        raise HTTPException(409,'Configure Telegram on the current primary controller')
     if action in {"configure-auto", "discover"}:
         await sync_telegram_identity()
     if action == "discover":
@@ -3910,6 +3920,8 @@ async def owner_station_reports(
 
 from .admin_api import router as admin_router
 app.include_router(admin_router)
+from .owner_site import router as owner_site_router
+app.include_router(owner_site_router)
 
 from . import retention
 app.add_event_handler("startup", retention.start)
@@ -3988,3 +4000,30 @@ app.include_router(contact_router)
 def device_profile_catalog():
     from .device_profiles import catalog
     return catalog()
+
+
+from .device_setup import router as device_router,LocalDevice,DevicePolicy,local_status,request_local
+app.include_router(device_router)
+
+@app.get('/api/commissioning/device',dependencies=[Depends(commissioning_access)])
+def commissioning_device_read():return local_status()
+
+@app.post('/api/commissioning/device',dependencies=[Depends(commissioning_access)])
+def commissioning_device_write(payload:LocalDevice):
+    from .wallet_domain import WalletConflict
+    try:return request_local(payload)
+    except WalletConflict as exc:raise HTTPException(409,str(exc)) from None
+
+@app.get('/api/commissioning/device-policy',dependencies=[Depends(commissioning_access)])
+def commissioning_device_policy_read():
+    from .device_setup import read_policy
+    return read_policy({'login':'installer'})
+
+@app.post('/api/commissioning/device-policy',dependencies=[Depends(commissioning_access)])
+def commissioning_device_policy_write(payload:DevicePolicy):
+    from .device_setup import save_policy
+    return save_policy(payload,{'login':'installer'})
+
+# Stop runtime/background workers before closing their reusable transports.
+from .http_pool import close_all as close_sync_http_clients
+app.add_event_handler("shutdown", close_sync_http_clients)

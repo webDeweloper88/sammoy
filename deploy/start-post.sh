@@ -4,6 +4,10 @@ cd /opt/sammoy/sammoy2
 profile='full'
 [ ! -f .hardware-profile ] || profile=$(cat .hardware-profile)
 case "$profile" in
+  dry-fog)
+    if [ -c /dev/ttyUSB0 ] && [ -c /dev/gpiochip0 ] && [ -c /dev/i2c-7 ]; then
+      exec docker compose -f docker-compose.yml -f docker-compose.nfc-relay.yml -f docker-compose.dry-fog.yml up -d --no-build --pull never --wait --wait-timeout 180
+    fi ;;
   relay-only)
     if [ -c /dev/ttyUSB0 ] && [ -c /dev/gpiochip0 ]; then
       exec docker compose -f docker-compose.yml -f docker-compose.relay-only.yml up -d --no-build --pull never --wait --wait-timeout 180

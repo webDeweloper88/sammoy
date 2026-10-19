@@ -54,6 +54,17 @@ try{
  s={...s,creditSum:25000,bonusSum:0}
  await page.locator('.bonus-caption').waitFor({state:'hidden'})
 
+ // A first tap asks the customer to wait, not to tap again while busy.
+ s={...s,walletTransferPending:true,walletOperationInProgress:true}
+ await page.getByText('Karta bilan operatsiya bajarilmoqda. Iltimos, kuting…',{exact:true}).waitFor()
+ assert.equal(await page.getByText(/Kartani qayta yaqinlashtiring/).count(),0)
+ assert.equal(await page.getByRole('button',{name:'SUV',exact:true}).getAttribute('aria-disabled'),'true')
+ // A durable interrupted operation requests the same card again.
+ s={...s,walletOperationInProgress:false,walletLastError:'network interrupted'}
+ await page.getByText(/Kartani qayta yaqinlashtiring/).waitFor()
+ s={...s,walletTransferPending:false,walletLastError:null}
+ await page.getByText(/Kartani qayta yaqinlashtiring/).waitFor({state:'hidden'})
+
  await page.getByRole('button',{name:'KO‘PIK',exact:true}).tap()
  await page.locator('.wash-status.time-primary').waitFor()
  assert.deepEqual(posts.at(-1),['/api/wash/mode',{mode:'foam'}])
@@ -62,7 +73,7 @@ try{
  assert.deepEqual(posts.at(-1),['/api/wash/mode',{mode:'pause'}])
  await page.getByRole('button',{name:'DAVOM ETISH',exact:true}).waitFor()
  assert.equal(await page.getByRole('button',{name:'DAVOM ETISH',exact:true}).getAttribute('aria-disabled'),'true')
- await page.getByText(/Avval pistolet/).waitFor()
+ await page.waitForFunction(()=>/Avval.*pistolet.*tepkisini/.test(document.querySelector('.wheel-center').textContent))
  s={...s,resumeRequiresTriggerReset:false}
  await page.waitForFunction(()=>document.querySelector('.wheel-center').getAttribute('aria-disabled')==='false')
  await page.getByRole('button',{name:'DAVOM ETISH',exact:true}).tap()

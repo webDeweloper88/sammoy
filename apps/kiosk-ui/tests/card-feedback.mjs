@@ -3,7 +3,7 @@ import { walletErrorText } from '../src/kiosk/card-feedback.js'
 import { washTexts } from '../src/kiosk/wash-texts.js'
 for (const texts of Object.values(washTexts)) {
  assert.equal(walletErrorText({walletLastError:'VIP-карта уже используется на другом посту'},texts),texts.cardInUse)
- for(const [error,key] of [['VIP daily limit reached','vipDailyLimit'],['VIP card is not active','vipInactive'],['Срок действия VIP-карты истёк','vipExpired']]){assert.ok(texts[key]);assert.notEqual(texts[key],texts.walletUnavailable);assert.equal(walletErrorText({walletLastError:error},texts),texts[key])}
+ for(const [error,key] of [['VIP access is not enabled for this device type','vipDeviceNotAllowed'],['VIP daily limit reached','vipDailyLimit'],['VIP card is not active','vipInactive'],['Срок действия VIP-карты истёк','vipExpired']]){assert.ok(texts[key]);assert.notEqual(texts[key],texts.walletUnavailable);assert.equal(walletErrorText({walletLastError:error},texts),texts[key])}
  assert.ok(texts.vipMoneyConflict)
  assert.notEqual(texts.vipMoneyConflict,texts.walletUnavailable)
  assert.equal(walletErrorText({walletLastError:'Денежный баланс нельзя смешивать с VIP-допуском'},texts),texts.vipMoneyConflict)

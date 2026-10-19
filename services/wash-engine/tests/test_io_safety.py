@@ -21,21 +21,21 @@ class IoSafetyTests(unittest.TestCase):
     def test_partial_off_failure_still_attempts_all_relays(self):
         r=wash_logic.WashRuntime();client=Mock();response=Mock();response.json.return_value={'actual':False}
         client.post.side_effect=[RuntimeError('fast endpoint missing'),RuntimeError('first failed')]+[response]*7
-        with patch.object(wash_logic.httpx,'Client') as factory:
+        with patch.object(wash_logic,'sync_client') as factory:
             factory.return_value.__enter__.return_value=client
             self.assertFalse(r._all_off_sync())
         self.assertEqual(client.post.call_count,9);self.assertFalse(r.state['outputsOffConfirmed'])
 
     def test_failed_off_never_enables_next_output(self):
         r=wash_logic.WashRuntime();r._all_off_sync=Mock(return_value=False)
-        with patch.object(wash_logic.httpx,'Client') as factory:
+        with patch.object(wash_logic,'sync_client') as factory:
             with self.assertRaises(RuntimeError):r._apply_output_sync('water')
             factory.assert_not_called()
         self.assertEqual(r._all_off_sync.call_count,2)
     def test_unconfirmed_on_forces_off(self):
         r=wash_logic.WashRuntime();r._all_off_sync=Mock(return_value=True)
         response=Mock();response.json.return_value={'actual':False}
-        with patch.object(wash_logic.httpx,'Client') as factory:
+        with patch.object(wash_logic,'sync_client') as factory:
             factory.return_value.__enter__.return_value.post.return_value=response
             with self.assertRaises(RuntimeError):r._apply_output_sync('water')
         self.assertIsNone(r.last_output);self.assertEqual(r._all_off_sync.call_count,2)
@@ -55,14 +55,14 @@ class IoSafetyTests(unittest.TestCase):
             self.assertLess(clock[0],deadline[0],'ON attempted with expired watchdog after slow OFF')
             events.append('on');return on
         client.post.side_effect=post
-        with patch.object(wash_logic.httpx,'Client') as factory:
+        with patch.object(wash_logic,'sync_client') as factory:
             factory.return_value.__enter__.return_value=client;r._apply_output_sync('foam')
         self.assertEqual(events,['off-confirmed','heartbeat','on']);self.assertEqual(r.last_output,'foam')
         self.assertEqual(client.post.call_args_list[1].kwargs,{'json':{'on':True}})
     def test_unconfirmed_lease_never_enables_output(self):
         r=wash_logic.WashRuntime();r._all_off_sync=Mock(return_value=True)
         response=Mock();response.json.return_value={'controller_lease_valid':False}
-        with patch.object(wash_logic.httpx,'Client') as factory:
+        with patch.object(wash_logic,'sync_client') as factory:
             factory.return_value.__enter__.return_value.post.return_value=response
             with self.assertRaises(RuntimeError):r._apply_output_sync('foam')
             self.assertEqual(factory.return_value.__enter__.return_value.post.call_count,1)
@@ -70,13 +70,13 @@ class IoSafetyTests(unittest.TestCase):
 
     def test_single_request_off_requires_complete_false_readback(self):
         r=wash_logic.WashRuntime();response=Mock();response.json.return_value={'off_confirmed':True,'outputs':dict.fromkeys(OUTPUTS,False)}
-        with patch.object(wash_logic.httpx,'Client') as factory:
+        with patch.object(wash_logic,'sync_client') as factory:
             client=factory.return_value.__enter__.return_value;client.post.return_value=response
             self.assertTrue(r._all_off_sync());self.assertEqual(client.post.call_count,1)
         self.assertTrue(r.state['outputsOffConfirmed'])
     def test_partial_fast_proof_falls_back_to_every_relay(self):
         r=wash_logic.WashRuntime();bad=Mock();bad.json.return_value={'off_confirmed':True,'outputs':{'foam':False}};off=Mock();off.json.return_value={'actual':False}
-        with patch.object(wash_logic.httpx,'Client') as factory:
+        with patch.object(wash_logic,'sync_client') as factory:
             client=factory.return_value.__enter__.return_value;client.post.side_effect=[bad]+[off]*8
             self.assertTrue(r._all_off_sync());self.assertEqual(client.post.call_count,9)
 

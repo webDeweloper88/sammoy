@@ -7,7 +7,7 @@ from app.admin_service import OUTPUTS, test_relay, all_off, require_idle
 
 class AdminTests(unittest.TestCase):
     def runtime(self,**state):
-        return Mock(lock=threading.RLock(),snapshot=Mock(return_value={'state':{'creditSum':0,**state}}))
+        return Mock(device_type='wash',lock=threading.RLock(),snapshot=Mock(return_value={'state':{'creditSum':0,**state}}))
     def factory(self,handler):return lambda **kwargs:httpx.Client(transport=httpx.MockTransport(handler),**kwargs)
     def test_every_unfinished_session_is_guarded(self):
         for state in ({'creditSum':1},{'activeMode':'water'},{'requestedOutput':'water'},{'armedMode':'foam'},{'activeSessionId':5},{'vipRemainingSeconds':1}):
@@ -35,3 +35,22 @@ class AdminTests(unittest.TestCase):
         with self.assertRaises(HTTPException):all_off(r,'http://io',self.factory(handler))
         self.assertEqual(calls,[f'/outputs/{name}' for name in OUTPUTS]+['/io'])
         r.select_mode.assert_called_once_with('pause');self.assertEqual(r.snapshot()['state']['creditSum'],1744)
+
+    def test_fog_tests_all_eight_outputs_including_purge(self):
+        from app.device_profiles import FOG_OUTPUTS
+        for name in FOG_OUTPUTS:
+            r=self.runtime();r.device_type='dry_fog';calls=[]
+            def handler(req):
+                calls.append(req.url.path)
+                return httpx.Response(200,json={'ok':True,'modbus_ok':True,'outputs':dict.fromkeys(FOG_OUTPUTS,False)})
+            test_relay(r,'http://io',name,name,self.factory(handler))
+            self.assertIn('/outputs/'+name+'/test',calls)
+        with self.assertRaises(HTTPException):test_relay(r,'http://io','water','water',self.factory(handler))
+    def test_fog_all_off_uses_fog_map(self):
+        from app.device_profiles import FOG_OUTPUTS
+        r=self.runtime();r.device_type='dry_fog';calls=[]
+        def handler(req):
+            calls.append(req.url.path)
+            return httpx.Response(200,json={'modbus_ok':True,'outputs':dict.fromkeys(FOG_OUTPUTS,False)})
+        all_off(r,'http://io',self.factory(handler))
+        self.assertEqual(calls,[f'/outputs/{name}' for name in FOG_OUTPUTS]+['/io'])

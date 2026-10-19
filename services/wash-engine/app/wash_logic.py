@@ -5,15 +5,19 @@ import time
 from math import ceil
 from copy import deepcopy
 from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import httpx
+from .http_pool import sync_client
+from .wallet_operation import card_operation
 from psycopg.types.json import Jsonb
 
 from .config import settings
 from .db import db
 from .bonus import remaining as bonus_remaining
 from .io_client import io_request
+from .device_profiles import profile
 
 
 MODE_OUTPUTS = {"water", "foam", "chem", "nano", "wax", "vacuum", "air", "osmos"}
@@ -83,19 +87,32 @@ def deep_merge(base: Any, override: Any) -> Any:
     return deepcopy(override) if override is not None else deepcopy(base)
 
 
-def normalize_parameters(value: dict[str, Any] | None) -> dict[str, Any]:
-    params = deep_merge(DEFAULT_WASH_PARAMETERS, value or {})
+def normalize_parameters(value: dict[str, Any] | None, device_type: str = "wash") -> dict[str, Any]:
+    device = profile(device_type)
+    defaults = deepcopy(DEFAULT_WASH_PARAMETERS)
+    if device_type == "dry_fog":
+        defaults.update(deepcopy(device['defaults']))
+        defaults['tariffs']['pause'] = {'amountSum':0,'durationSeconds':0,'enabled':True}
+        defaults['requireTotalStopTrigger'] = False
+    params = deep_merge(defaults, value or {})
+    if device_type == "dry_fog":
+        # Trigger wiring is diagnostic only for this type; an old wash setting
+        # must never make a fragrance require IN3.
+        params['requireTotalStopTrigger'] = False
+        params['pauseEnabled'] = params.get('pauseEnabled') is not False
+        params['tariffs']['pause']['enabled'] = params['pauseEnabled']
+        params['tariffs'] = {key:params['tariffs'].get(key,{}) for key in defaults['tariffs']}
     from .bonus import policy
     params["topUpBonus"] = policy(params.get("topUpBonus"))
     params["billPulseSum"] = max(int(params.get("billPulseSum") or BILL_PULSE_SUM), 0)
     params["coinPulseSum"] = max(int(params.get("coinPulseSum") or COIN_PULSE_SUM), 0)
     free_pause_raw = params.get(
         "freePauseSeconds",
-        FREE_PAUSE_SECONDS,
+        defaults["freePauseSeconds"],
     )
     params["freePauseSeconds"] = max(
         int(
-            FREE_PAUSE_SECONDS
+            defaults["freePauseSeconds"]
             if free_pause_raw is None
             else free_pause_raw
         ),
@@ -137,12 +154,12 @@ def normalize_parameters(value: dict[str, Any] | None) -> dict[str, Any]:
     )
 
     paid_pause["amountSum"] = max(
-        int(paid_pause.get("amountSum", 1000) or 0),
+        int(paid_pause.get("amountSum", defaults["paidPause"]["amountSum"]) or 0),
         0,
     )
 
     paid_pause["durationSeconds"] = max(
-        int(paid_pause.get("durationSeconds", 120) or 0),
+        int(paid_pause.get("durationSeconds", defaults["paidPause"]["durationSeconds"]) or 0),
         0,
     )
 
@@ -169,7 +186,7 @@ def normalize_parameters(value: dict[str, Any] | None) -> dict[str, Any]:
     )
 
     tariffs = params.setdefault("tariffs", {})
-    for mode, default in DEFAULT_WASH_PARAMETERS["tariffs"].items():
+    for mode, default in defaults["tariffs"].items():
         current = tariffs.get(mode, {})
         merged = deep_merge(default, current if isinstance(current, dict) else {})
         merged["amountSum"] = max(int(merged.get("amountSum") or default.get("amountSum") or 0), 0)
@@ -184,13 +201,21 @@ def normalize_parameters(value: dict[str, Any] | None) -> dict[str, Any]:
 
 
 class WashRuntime:
-    def __init__(self) -> None:
+    def __init__(self, device_type: str = "wash") -> None:
+        device = profile(device_type)
+        self.device_type = device['type']
+        self.mode_outputs = frozenset(device['client_programs'])
+        self.all_outputs = frozenset(device['outputs'])
+        self.program_order = tuple(device['client_programs']) + ('pause',)
+        self.parameter_key = 'dry_fog_parameters' if device_type == 'dry_fog' else 'wash_parameters'
         self.lock = threading.RLock()
+        self._wallet_pending_snapshot = None
         self.shared_wallet_enabled = False
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
-        self.params = normalize_parameters(None)
+        self.params = normalize_parameters(None, self.device_type)
         self.state: dict[str, Any] = {
+            "deviceType": self.device_type,
             "phase": "idle",
             "creditSum": 0,
             "bonusSum": 0,
@@ -265,6 +290,9 @@ class WashRuntime:
         }
 
     def start(self) -> None:
+        if self.device_type == 'dry_fog':
+            from .device_setup import startup_guard
+            startup_guard(self)
         self.stop_event.clear()
         self.load_parameters()
 
@@ -282,6 +310,9 @@ class WashRuntime:
         self._baseline_rfid_events()
         self.thread = threading.Thread(target=self._run, name="wash-runtime", daemon=True)
         self.thread.start()
+        from .device_setup import policy_loop
+        self.policy_thread=threading.Thread(target=policy_loop,args=(self,),name="device-policy",daemon=True)
+        self.policy_thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -298,23 +329,24 @@ class WashRuntime:
     def load_parameters(self) -> None:
         with db() as conn:
             row = conn.execute(
-                "SELECT setting_value FROM app_settings WHERE setting_key = 'wash_parameters'",
+                "SELECT setting_value FROM app_settings WHERE setting_key = %s",
+                (self.parameter_key,),
             ).fetchone()
         with self.lock:
-            self.params = normalize_parameters(row["setting_value"] if row else None)
+            self.params = normalize_parameters(row["setting_value"] if row else None, self.device_type)
 
     def save_parameters(self, params: dict[str, Any]) -> dict[str, Any]:
-        normalized = normalize_parameters(params)
+        normalized = normalize_parameters(params, self.device_type)
         with db() as conn:
             conn.execute(
                 """
                 INSERT INTO app_settings (setting_key, setting_value, updated_at)
-                VALUES ('wash_parameters', %s, now())
+                VALUES (%s, %s, now())
                 ON CONFLICT (setting_key) DO UPDATE
                 SET setting_value = EXCLUDED.setting_value,
                     updated_at = now()
                 """,
-                (Jsonb(normalized),),
+                (self.parameter_key, Jsonb(normalized)),
             )
             conn.commit()
         with self.lock:
@@ -322,53 +354,73 @@ class WashRuntime:
         return normalized
 
     def snapshot(self) -> dict[str, Any]:
-        with self.lock:
-            state = deepcopy(self.state)
-            state["bonusSum"]=bonus_remaining(self) if self.active_session_source!="vip" else 0
-            state["moneySum"]=0 if self.active_session_source=="vip" else max(0,int(state.get("creditSum") or 0)-state["bonusSum"])
-            state.pop("_bonusFloat",None)
-            state.pop("_lastBonusSpend",None)
-            state.pop("_creditFloat", None)
-            state.pop("_pauseBudgetFloat", None)
-            state.pop("_pauseBudgetInitialized", None)
-            state.pop("_triggerGraceFloat", None)
-            state.pop("_triggerResetOffFloat", None)
-            state["runtimeAgeSeconds"] = max(0.0, (datetime.now(UTC) - datetime.fromisoformat(state["updatedAt"])).total_seconds())
-            # Read-only presentation: never advance a second client-side money/timer loop.
-            mode = state.get("activeMode") or state.get("armedMode")
-            credit = max(0, int(state.get("creditSum") or 0))
-            tariff = self.params.get("tariffs", {}).get(mode, {})
-            amount = int(tariff.get("amountSum") or 0)
-            duration = int(tariff.get("durationSeconds") or 0)
-            state["remainingSeconds"] = (
-                ceil(credit * duration / amount)
-                if mode and amount > 0 and duration > 0 else None
-            )
-            state["displayTimeKind"] = "program" if mode else "unselected"
-            if state.get("pauseState") == "free":
-                state["remainingSeconds"] = max(0, int(state.get("freePauseRemaining") or 0))
-                state["displayTimeKind"] = "free_pause"
-            elif state.get("pauseState") == "paid":
-                pause = self.params.get("paidPause", {})
-                cost = int(pause.get("amountSum") or 0)
-                seconds = int(pause.get("durationSeconds") or 0)
-                state["remainingSeconds"] = ceil(credit * seconds / cost) if cost > 0 and seconds > 0 else None
-                state["displayTimeKind"] = "paid_pause"
-            state["activeSessionSource"] = self.active_session_source
-            state["activeSessionId"] = self.active_session_id
-            state["activeSessionCardUid"] = self.active_session_card_uid
-            return {
-                "ok": True,
-                "state": state,
-                "parameters": deepcopy(self.params),
-                "simulation": deepcopy(self.simulation),
-            }
+        # Financial mutations remain serialized. A wallet RPC must not block the
+        # read-only screen and turn a healthy connection into a false outage.
+        while not self.lock.acquire(timeout=0.05):
+            pending = self._wallet_pending_snapshot
+            if pending is not None:
+                return deepcopy(pending)
+        try:
+            return self._snapshot_locked()
+        finally:
+            self.lock.release()
+
+    def _publish_wallet_pending_locked(self) -> None:
+        # Publish a detached, immutable-by-convention view before network I/O.
+        # It retains the last confirmed balance and explicitly prevents starts.
+        pending = self._snapshot_locked()
+        pending["state"]["walletOperationInProgress"] = True
+        self._wallet_pending_snapshot = pending
+
+    def _snapshot_locked(self) -> dict[str, Any]:
+        state = deepcopy(self.state)
+        state["bonusSum"]=bonus_remaining(self) if self.active_session_source!="vip" else 0
+        state["moneySum"]=0 if self.active_session_source=="vip" else max(0,int(state.get("creditSum") or 0)-state["bonusSum"])
+        state.pop("_bonusFloat",None)
+        state.pop("_lastBonusSpend",None)
+        state.pop("_creditFloat", None)
+        state.pop("_pauseBudgetFloat", None)
+        state.pop("_pauseBudgetInitialized", None)
+        state.pop("_triggerGraceFloat", None)
+        state.pop("_triggerResetOffFloat", None)
+        state["runtimeAgeSeconds"] = max(0.0, (datetime.now(UTC) - datetime.fromisoformat(state["updatedAt"])).total_seconds())
+        # Read-only presentation: never advance a second client-side money/timer loop.
+        mode = state.get("activeMode") or state.get("armedMode")
+        credit = max(0, int(state.get("creditSum") or 0))
+        tariff = self.params.get("tariffs", {}).get(mode, {})
+        amount = int(tariff.get("amountSum") or 0)
+        duration = int(tariff.get("durationSeconds") or 0)
+        state["remainingSeconds"] = (
+            ceil(credit * duration / amount)
+            if mode and amount > 0 and duration > 0 else None
+        )
+        state["displayTimeKind"] = "program" if mode else "unselected"
+        if state.get("pauseState") == "free":
+            state["remainingSeconds"] = max(0, int(state.get("freePauseRemaining") or 0))
+            state["displayTimeKind"] = "free_pause"
+        elif state.get("pauseState") == "paid":
+            pause = self.params.get("paidPause", {})
+            cost = int(pause.get("amountSum") or 0)
+            seconds = int(pause.get("durationSeconds") or 0)
+            state["remainingSeconds"] = ceil(credit * seconds / cost) if cost > 0 and seconds > 0 else None
+            state["displayTimeKind"] = "paid_pause"
+        state["activeSessionSource"] = self.active_session_source
+        state["activeSessionId"] = self.active_session_id
+        state["activeSessionCardUid"] = self.active_session_card_uid
+        return {
+            "ok": True,
+            "state": state,
+            "parameters": deepcopy(self.params),
+            "simulation": deepcopy(self.simulation),
+        }
 
     def select_mode(self, mode: str) -> dict[str, Any]:
-        if mode not in PROGRAM_ORDER:
+        if mode not in self.program_order:
             raise ValueError(f"Unknown wash mode: {mode}")
 
         with self.lock:
+            if self.state.get('deviceProfileMismatch') and mode!='pause':
+                raise ValueError('Installer must apply the matching device profile')
             if self.state.get("walletTransferPending") and mode != "pause":
                 raise ValueError("Wallet transfer is pending; equipment remains OFF")
             if self.state.get("licenseLocked"):
@@ -750,6 +802,9 @@ class WashRuntime:
                 self._all_off_sync()
 
     def tick(self) -> None:
+        if self.state.get("deviceProfileMismatch"):
+            self._apply_output_sync(None)
+            return
         if getattr(self,'_click_credit_pending',None):
             try:
                 from .bonus_credit import reconcile
@@ -764,7 +819,7 @@ class WashRuntime:
         io = self._get_io_sync()
         from .io_safety import validate_io
         try:
-            validate_io(io,self.last_output)
+            validate_io(io,self.last_output,self.device_type)
             boot,trip=io.get('controller_boot_id'),io.get('safety_trip_seq')
             changed=(self.io_boot_id is not None and boot!=self.io_boot_id) or (self.io_trip_seq is not None and trip!=self.io_trip_seq)
             self.io_boot_id,self.io_trip_seq=boot,trip
@@ -1282,7 +1337,13 @@ class WashRuntime:
                 # ----------------------------------------------------
                 # Normal active program.
                 # ----------------------------------------------------
-                if armed not in MODE_OUTPUTS:
+                if self.device_type == 'dry_fog' and self.params['tariffs'].get(armed,{}).get('enabled') is False:
+                    self.state['phase'] = 'mode_disabled'
+                    self.state['selectedMode'] = 'pause'
+                    self.state['armedMode'] = None
+                    self.state['activeMode'] = None
+                    self.state['pauseState'] = 'none'
+                elif armed not in self.mode_outputs:
                     self.state["phase"] = "unsupported_mode"
                     self.state["activeMode"] = None
                     self.state["pauseState"] = "none"
@@ -1377,7 +1438,7 @@ class WashRuntime:
         bonus=award(amount_sum,self.params)
         self.state['creditSum']+=amount_sum+bonus
         add(self,bonus)
-        raw={**raw,'bonus_sum':bonus}
+        raw={**raw,'bonus_sum':bonus,'bonus_domain':self.params.get('bonusDomain','shared')}
         self.state['_creditFloat']=float(self.state['creditSum'])
         self.state['lastCreditSource']=source
         self._record_credit_locked(amount_sum,source,pulse_count,raw)
@@ -1432,6 +1493,7 @@ class WashRuntime:
             self.state["lastRfidResult"] = self.state["lastRfidStatus"]
             self.state["lastRfidProcessedAt"] = event.get("time") or now_iso()
 
+    @card_operation()
     def _apply_rfid_card_locked(self, uid: str, event: dict[str, Any]) -> None:
         if self.shared_wallet_enabled:
             from .wallet_post import handle_card, pending_job, freeze
@@ -1462,6 +1524,8 @@ class WashRuntime:
                 self.state['walletLastError']=str(exc)[:200]
                 if not self.state['walletTransferPending']:
                     self.state['phase']='manual_pause' if self.state.get('armedMode') else 'idle'
+            finally:
+                self._wallet_pending_snapshot = None
             return
         with db() as conn:
             card = conn.execute(
@@ -1904,7 +1968,8 @@ class WashRuntime:
         session_id = self.active_session_id
         if not session_id:
             return
-        if self.active_usage_mode != mode:
+        usage_day=datetime.now(ZoneInfo('Asia/Tashkent')).date().isoformat()
+        if self.active_usage_mode != mode or getattr(self,'active_usage_day',None)!=usage_day:
             self._flush_usage_locked(close=True)
             with db() as conn:
                 row = conn.execute(
@@ -1918,6 +1983,7 @@ class WashRuntime:
                 conn.commit()
             self.active_usage_id = int(row["id"])
             self.active_usage_mode = mode
+            self.active_usage_day = usage_day
             self.pending_usage = {"duration_ms": 0.0, "spent_sum": 0.0, "pause_ms": 0.0, "total_stop_wait_ms": 0.0}
 
         elapsed_ms = elapsed * 1000.0
@@ -2037,6 +2103,8 @@ class WashRuntime:
             except Exception as exc:
                 self.state['walletTransferPending']=bool(pending_job())
                 self.state['walletLastError']=str(exc)[:200]
+            finally:
+                self._wallet_pending_snapshot = None
 
     def _heartbeat_session_locked(self) -> None:
         """
@@ -2629,7 +2697,7 @@ class WashRuntime:
 
     def _get_io_sync(self) -> dict[str, Any]:
         try:
-            with httpx.Client(timeout=2.0) as client:
+            with sync_client(scope='io',timeout=2.0) as client:
                 heartbeat=client.post(f"{settings.io_helper_url}/controller/heartbeat",json={})
                 heartbeat.raise_for_status()
                 response = client.get(f"{settings.io_helper_url}/io")
@@ -2645,7 +2713,7 @@ class WashRuntime:
             raise
 
     def _get_rfid_events_sync(self, since: int | None = None) -> dict[str, Any]:
-        with httpx.Client(timeout=2.0) as client:
+        with sync_client(scope='io',timeout=2.0) as client:
             response = client.get(
                 f"{settings.io_helper_url}/rfid/events",
                 params={"since": int(since or 0), "limit": 1000},
@@ -2657,14 +2725,14 @@ class WashRuntime:
         if output == self.last_output:
             return
 
-        if output is not None and output not in MODE_OUTPUTS:
+        if output is not None and output not in self.mode_outputs:
             raise ValueError(f"Unsupported output: {output}")
 
         try:
             if not self._all_off_sync():
                 raise RuntimeError("Not all outputs confirmed OFF")
             if output is not None:
-                with httpx.Client(timeout=3.0) as client:
+                with sync_client(scope='io',timeout=3.0) as client:
                     # The confirmed OFF sweep can consume most of the controller
                     # lease on a real serial board. Renew only after it succeeds,
                     # immediately before this explicitly requested ON operation.
@@ -2687,13 +2755,13 @@ class WashRuntime:
     def _all_off_sync(self) -> bool:
         errors=[]
         try:
-            with httpx.Client(timeout=3.0) as client:
+            with sync_client(scope='io',timeout=3.0) as client:
                 try:
                     response=client.post(f"{settings.io_helper_url}/controller/all-off",json={})
                     response.raise_for_status()
                     proof=response.json()
                     outputs=proof.get('outputs',{})
-                    if proof.get('off_confirmed') is True and set(outputs)==set(MODE_OUTPUTS) and all(v is False for v in outputs.values()):
+                    if proof.get('off_confirmed') is True and set(outputs)==self.all_outputs and all(v is False for v in outputs.values()):
                         with self.lock:
                             self.last_output=None
                             self.state['outputsOffConfirmed']=True
@@ -2703,13 +2771,13 @@ class WashRuntime:
                     # Older helper or failed proof: retain exhaustive emergency
                     # OFF attempts. No ON until one complete proof succeeds.
                     pass
-                for name in sorted(MODE_OUTPUTS):
+                for name in sorted(self.all_outputs):
                     try:
                         response=client.post(f"{settings.io_helper_url}/outputs/{name}",json={"on":False})
                         response.raise_for_status()
                         if response.json().get('actual') is not False:raise RuntimeError('OFF readback not confirmed')
                     except Exception:errors.append(name)
-        except Exception:errors=list(MODE_OUTPUTS)
+        except Exception:errors=list(self.all_outputs)
         with self.lock:
             self.last_output=None
             self.state['outputsOffConfirmed']=not errors
@@ -2717,4 +2785,4 @@ class WashRuntime:
         return not errors
 
 
-wash_runtime = WashRuntime()
+wash_runtime = WashRuntime(settings.device_type)

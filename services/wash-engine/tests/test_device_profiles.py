@@ -13,3 +13,23 @@ class DeviceProfilesTests(unittest.TestCase):
   self.assertEqual(profile()['outputs']['air'],7);p=profile('dry_fog');p['outputs']['purge']=0;self.assertEqual(profile('dry_fog')['outputs']['purge'],7);self.assertEqual(len(catalog()['profiles']),2)
  def test_wash_engine_rejects_fog_helper_before_start(self):
   with self.assertRaisesRegex(RuntimeError,'profile mismatch'):validate_io({'device_type':'dry_fog'})
+
+
+class DryFogReadbackTests(unittest.TestCase):
+    def io(self):
+        return {'device_type':'dry_fog','inputs':{},'outputs':dict.fromkeys(profile('dry_fog')['outputs'],False),'modbus_ok':True,'poll_age_seconds':0,'nv9_enabled':False}
+
+    def test_each_output_requires_matching_confirmation(self):
+        from app.io_safety import validate_io
+        for output in profile('dry_fog')['outputs']:
+            io=self.io();io['outputs'][output]=True
+            validate_io(io,output,'dry_fog')
+            with self.assertRaises(RuntimeError):validate_io(io,None,'dry_fog')
+            io['outputs']['aroma_2' if output!='aroma_2' else 'purge']=True
+            with self.assertRaises(RuntimeError):validate_io(io,output,'dry_fog')
+
+    def test_legacy_or_wrong_map_cannot_prove_fog_outputs_off(self):
+        from app.io_safety import validate_io
+        for change in ({'inputs':[]},{'outputs':dict.fromkeys(profile('wash')['outputs'],False)},{'outputs':{**self.io()['outputs'],'unknown':True}},{'poll_age_seconds':2}):
+            with self.assertRaises(RuntimeError):validate_io({**self.io(),**change},None,'dry_fog')
+        validate_io(self.io(),None,'dry_fog')

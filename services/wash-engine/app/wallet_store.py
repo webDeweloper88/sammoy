@@ -3,7 +3,7 @@
 The authority coordinator obtains signed standby durability acknowledgements
 before commit_prepared; no network failure becomes a successful transfer here.
 """
-from dataclasses import asdict
+from .wallet_devices import state_dump
 import hashlib
 import json
 
@@ -93,7 +93,7 @@ class WalletStore:
                     raise WalletConflict("Operation ID reused with different content")
                 return self._receipt(existing)
             self.conn.execute("INSERT INTO shared_wallet_cards(site_id,uid,state) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING",
-                              (self.site_id, uid, Jsonb(asdict(WalletState(uid)))))
+                              (self.site_id, uid, Jsonb(state_dump(WalletState(uid)))))
             row = self.conn.execute("SELECT state,pending_operation FROM shared_wallet_cards WHERE site_id=%s AND uid=%s FOR UPDATE",
                                     (self.site_id, uid)).fetchone()
             if row["pending_operation"]:
@@ -126,7 +126,7 @@ class WalletStore:
                 (site_id,operation_id,uid,fingerprint,command,before_revision,proposed_state,result,status)
                 VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'prepared') RETURNING *
                 """, (self.site_id, operation_id, uid, digest, Jsonb(command), state.revision,
-                      Jsonb(asdict(proposed)), Jsonb(result))).fetchone()
+                      Jsonb(state_dump(proposed)), Jsonb(result))).fetchone()
             self.conn.execute("UPDATE shared_wallet_cards SET pending_operation=%s WHERE site_id=%s AND uid=%s",
                               (operation_id, self.site_id, uid))
             return self._receipt(operation)
@@ -160,7 +160,7 @@ class WalletStore:
             for day,used in operation['result'].get('vip_import_uses',{}).items():
                 self.conn.execute('INSERT INTO shared_wallet_vip_uses(site_id,uid,day,used) VALUES(%s,%s,%s,%s) ON CONFLICT(site_id,uid,day) DO UPDATE SET used=EXCLUDED.used',(self.site_id,operation['uid'],day,used))
             self.conn.execute("UPDATE shared_wallet_cards SET state=%s,pending_operation=NULL WHERE site_id=%s AND uid=%s",
-                              (Jsonb(asdict(proposed)), self.site_id, operation["uid"]))
+                              (Jsonb(state_dump(proposed)), self.site_id, operation["uid"]))
             row = self.conn.execute("UPDATE shared_wallet_operations SET status='committed',committed_at=now() WHERE site_id=%s AND operation_id=%s RETURNING *",
                                     (self.site_id, operation_id)).fetchone()
             return self._receipt(row)
@@ -172,16 +172,16 @@ class WalletStore:
             return [(command['receipt_id'],receipt(command))]
         if command.get('action')=='import_local_balance':
             if not all(key in command for key in ('receipt_id','amount_sum')):raise WalletConflict('Local import fields required')
-            return [(command['receipt_id'],{'source':'opening','amount_sum':command['amount_sum'],'assignment_id':None,**({'bonus_sum':command['bonus_sum']} if command.get('bonus_sum') else {})})]
+            return [(command['receipt_id'],{'source':'opening','amount_sum':command['amount_sum'],'assignment_id':None,**({'bonus_sum':command['bonus_sum']} if command.get('bonus_sum') else {}),**({'bonus_domain':command.get('bonus_domain','shared')} if command.get('wallet_protocol')==2 else {})})]
         if command.get('action')=='wallet_credit':
             if not all(key in command for key in ('receipt_id','source','amount_sum')):
                 raise WalletConflict('Funding receipt fields required')
-            return [(command['receipt_id'],{'source':command['source'],'amount_sum':command['amount_sum'],'assignment_id':None,**({'bonus_sum':command['bonus_sum']} if command.get('bonus_sum') else {})})]
+            return [(command['receipt_id'],{'source':command['source'],'amount_sum':command['amount_sum'],'assignment_id':None,**({'bonus_sum':command['bonus_sum']} if command.get('bonus_sum') else {}),**({'bonus_domain':command.get('bonus_domain','shared')} if command.get('wallet_protocol')==2 else {})})]
         if command.get('action')=='checkpoint':
             funding=command.get('funding',[])
             if not isinstance(funding,list) or 'assignment_id' not in command or any(not isinstance(r,dict) or not all(k in r for k in ('id','source','amount_sum')) for r in funding):
                 raise WalletConflict('Valid funding receipts required')
-            return [(r['id'],{'source':r['source'],'amount_sum':r['amount_sum'],'assignment_id':command['assignment_id'],**({'bonus_sum':r['bonus_sum']} if r.get('bonus_sum') else {})}) for r in command.get('funding',[])]
+            return [(r['id'],{'source':r['source'],'amount_sum':r['amount_sum'],'assignment_id':command['assignment_id'],**({'bonus_sum':r['bonus_sum']} if r.get('bonus_sum') else {}),**({'bonus_domain':r.get('bonus_domain','shared')} if command.get('wallet_protocol')==2 else {})}) for r in command.get('funding',[])]
         return []
 
     def export_operation(self, operation_id: str) -> dict:
@@ -218,7 +218,7 @@ class WalletStore:
                     raise WalletConflict("Conflicting replica operation")
                 return self._receipt(existing)
             self.conn.execute("INSERT INTO shared_wallet_cards(site_id,uid,state) VALUES(%s,%s,%s) ON CONFLICT DO NOTHING",
-                              (self.site_id, uid, Jsonb(asdict(WalletState(uid)))))
+                              (self.site_id, uid, Jsonb(state_dump(WalletState(uid)))))
             card = self.conn.execute("SELECT state,pending_operation FROM shared_wallet_cards WHERE site_id=%s AND uid=%s FOR UPDATE",
                                      (self.site_id, uid)).fetchone()
             if card["pending_operation"] or card["state"]["revision"] != payload["before_revision"]:

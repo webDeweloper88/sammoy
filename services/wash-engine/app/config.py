@@ -1,3 +1,4 @@
+from typing import Literal
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +17,7 @@ class Settings(BaseSettings):
     default_owner_password: str
     default_admin_login: str = "admin"
     default_admin_password: str
+    device_type: Literal["wash","dry_fog"] = "wash"
     simulation_enabled: bool = False
     io_helper_url: str = "http://io-helper:8080"
     click_gateway_url: str = "https://gateway.example.com"

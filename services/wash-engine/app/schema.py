@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field
+from typing import Literal
 
 
 class LoginRequest(BaseModel):
@@ -53,6 +54,7 @@ class VipProfileRequest(BaseModel):
     grant_seconds: int = Field(ge=0, le=24 * 60 * 60)
     max_uses_per_day: int | None = Field(default=None, ge=1, le=1000)
     owner_notes: str = Field(default="", max_length=500)
+    device_types: list[Literal["wash","dry_fog"]] = Field(default_factory=lambda:["wash"],min_length=1,max_length=2)
 
 
 class VipProfilesRequest(BaseModel):

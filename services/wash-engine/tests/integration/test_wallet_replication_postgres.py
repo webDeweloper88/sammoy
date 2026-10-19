@@ -98,3 +98,56 @@ class WalletReplicationTests(unittest.TestCase):
         self.opening();self.coordinator.execute('load','CARD',{'action':'reserve_load','post_no':2,'assignment_id':'a','visit_id':'v'},self.policy)
         payload=self.primary.export_operation('load');payload['site_id']='OTHER'
         with self.assertRaises(WalletConflict):self.receiver.stage(self.authority.envelope(payload))
+
+    def typed(self,op,action,kind='wash',**kw):
+        return self.coordinator.execute(op,'CARD',{'wallet_protocol':2,'device_type':kind,'action':action,**kw},WalletPolicy(bonus_mode='separate'))
+
+    def test_device_wallet_migration_and_two_types_are_durable_on_both_nodes(self):
+        self.opening()
+        self.typed('migrate','migrate_device_wallet')
+        self.typed('bonus','wallet_credit',source='cash',receipt_id='bonus-receipt',amount_sum=10000,bonus_sum=1000,bonus_domain='wash')
+        r=self.typed('fog-load','reserve_load','dry_fog',post_no=2,assignment_id='fog',visit_id='visit')
+        self.assertEqual(r['result']['balance_sum'],45000)
+        self.typed('fog-accept','accept_load','dry_fog',post_no=2,assignment_id='fog')
+        self.typed('fog-check','checkpoint','dry_fog',post_no=2,assignment_id='fog',remaining_sum=40000,remaining_bonus_sum=0,pause_millis=230000)
+        self.typed('fog-prepare','prepare_return','dry_fog',post_no=2,assignment_id='fog')
+        self.typed('fog-return','complete_return','dry_fog',post_no=2,assignment_id='fog')
+        r=self.typed('wash-load','reserve_load',post_no=1,assignment_id='wash',visit_id='ignored-new-visit')
+        self.assertEqual(r['result']['balance_sum'],41000);self.assertEqual(r['result']['bonus_sum'],1000)
+        self.assertEqual(r['result']['pause_millis'],60000)
+        self.assertEqual(self.primary.inspect('CARD'),self.standby.inspect('CARD'))
+        state=self.primary.inspect('CARD')['state']
+        self.assertEqual(state['device_wallet']['pause_by_type']['dry_fog'],230000)
+        self.assertEqual(state['spent_sum'],5000)
+        self.assertEqual(self.primary.state_digest(),self.standby.state_digest())
+
+    def test_typed_commit_reply_loss_retry_does_not_duplicate_domain_bonus(self):
+        self.opening();self.typed('migrate','migrate_device_wallet')
+        def lost(envelope):self.receiver.commit(envelope);raise WalletUnavailable('reply lost')
+        self.coordinator.remote_commit=lost
+        with self.assertRaises(WalletUnavailable):
+            self.typed('fog-credit','wallet_credit','dry_fog',source='click',receipt_id='click:typed',amount_sum=10000,bonus_sum=1000,bonus_domain='dry_fog')
+        self.coordinator.remote_commit=self.receiver.commit
+        for _ in range(2):self.typed('fog-credit','wallet_credit','dry_fog',source='click',receipt_id='click:typed',amount_sum=10000,bonus_sum=1000,bonus_domain='dry_fog')
+        state=self.primary.inspect('CARD')['state']
+        self.assertEqual(state['wallet_sum'],46000);self.assertEqual(state['device_wallet']['wallet_bonus']['dry_fog'],1000)
+        self.assertEqual(self.primary.inspect('CARD'),self.standby.inspect('CARD'))
+        # A new operation ID with the same receipt is also safe after restart.
+        self.primary=WalletStore(self.nodes[0][0],'SITE');self.coordinator.store=self.primary
+        self.typed('fog-credit-new-id','wallet_credit','dry_fog',source='click',receipt_id='click:typed',amount_sum=10000,bonus_sum=1000,bonus_domain='dry_fog')
+        self.assertEqual(self.primary.inspect('CARD')['state']['wallet_sum'],46000)
+
+    def test_old_replica_cannot_ack_typed_snapshot_and_primary_does_not_commit(self):
+        self.opening()
+        def old_node(envelope):
+            if 'device_wallet' in envelope['payload']['proposed_state']:raise WalletUnavailable('Old node cannot parse typed wallet')
+            return self.receiver.stage(envelope)
+        self.coordinator.remote_stage=old_node
+        with self.assertRaises(WalletUnavailable):self.typed('migrate','migrate_device_wallet')
+        self.assertFalse(self.primary.inspect('CARD')['available'])
+        self.assertNotIn('device_wallet',self.primary.inspect('CARD')['state'])
+        self.assertEqual(self.primary.inspect('CARD')['state']['wallet_sum'],35000)
+        self.coordinator.remote_stage=self.receiver.stage;self.typed('migrate','migrate_device_wallet')
+        self.assertEqual(self.primary.inspect('CARD'),self.standby.inspect('CARD'))
+        with self.assertRaises(WalletConflict):
+            self.coordinator.execute('old-post','CARD',{'action':'reserve_load','post_no':1,'assignment_id':'a','visit_id':'v'},self.policy)

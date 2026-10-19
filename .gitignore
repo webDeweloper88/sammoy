@@ -49,3 +49,5 @@ factory-access.json
 GOLDEN_TEMPLATE.json
 apps/kiosk-ui/dist/
 release-artifacts/
+
+.hardware-profile.*

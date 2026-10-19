@@ -1,6 +1,9 @@
 import { idleTexts } from './idle-texts.js'
 // Same customer language keys as IdleScreen and Owner's kiosk settings.
 const rows = {
+ noInternet:['Internet aloqasi yo‘q','Интернет байланысы жоқ','Интернет байланышы жок','Нет подключения к интернету'],
+ vipDeviceNotAllowed:['Bu VIP karta ushbu xizmat uchun yoqilmagan. Boshqa to‘lov usulini tanlang.','Бұл VIP карта осы қызметке қосылмаған. Басқа төлем тәсілін таңдаңыз.','Бул VIP карта бул кызмат үчүн иштетилген эмес. Башка төлөм ыкмасын тандаңыз.','Эта VIP-карта недоступна для данной услуги. Выберите другой способ оплаты.'],
+ bonusNotForDevice:['Kartadagi bonus bu xizmat uchun amal qilmaydi. Boshqa to‘lov usulini tanlang.','Картадағы бонус бұл қызметке жарамсыз. Басқа төлем тәсілін таңдаңыз.','Картадагы бонус бул кызматка жараксыз. Башка төлөм ыкмасын тандаңыз.','Бонус на карте не действует для этой услуги. Выберите другой способ оплаты.'],
  runningBadge:['ISHLAYAPTI','ЖҰМЫС ІСТЕП ТҰР','ИШТЕП ЖАТАТ','РАБОТАЕТ'],
  readyToWash:['Yuvishga tayyormisiz?','Жууға дайынсыз ба?','Жууну баштайсызбы?','Готовы к мойке?'],
  vipPaymentBlocked:["VIP seansida mavjud emas", "VIP сеансында қолжетімсіз", "VIP сеансында жеткиликсиз", "Недоступно во время VIP-сеанса"],
@@ -36,6 +39,7 @@ const rows = {
  walletCredited:['Mablag‘ karta hamyoniga tushdi','Қаражат карта әмиянына түсті','Каражат карта капчыгына түштү','Деньги зачислены в кошелёк карты'],
  paymentRecovery:['To‘lov saqlandi. Operatorga murojaat qiling','Төлем сақталды. Операторға хабарласыңыз','Төлөм сакталды. Операторго кайрылыңыз','Платёж сохранён для восстановления. Обратитесь к оператору'],
  vipGranted:['VIP-dopusk berildi','VIP рұқсаты берілді','VIP уруксаты берилди','VIP-допуск получен'],
+ walletProcessing:['Karta bilan operatsiya bajarilmoqda. Iltimos, kuting…','Карта операциясы орындалуда. Күте тұрыңыз…','Карта операциясы аткарылууда. Күтө туруңуз…','Выполняется операция карты. Пожалуйста, подождите…'],
  walletPending:['Karta operatsiyasi yakunlanmoqda. Kartani qayta yaqinlashtiring','Карта операциясы аяқталуда. Картаны қайта жақындатыңыз','Карта операциясы аяктоодо. Картаны кайра жакындатыңыз','Завершается операция карты. Приложите ту же карту повторно'],
  pauseCharging:['Balansdan mablag‘ yechilmoqda','Баланстан ақша алынуда','Баланстан акча алынууда','Идёт списание с баланса'],
  noCharge:['Mablag‘ yechilmaydi','Ақша алынбайды','Акча алынбайт','Без списания'],

@@ -16,6 +16,7 @@ from typing import Annotated
 from urllib.parse import urlsplit
 
 import httpx
+from .http_pool import sync_client
 import psycopg
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -68,9 +69,16 @@ def configuration():
         row=conn.execute("SELECT setting_value FROM app_settings WHERE setting_key='shared_wallet'").fetchone()
     ident=identity()
     defaults={'enabled':False,'primary_post':1,'standby_post':None,'generation':1,
-              'single_node':False,'standby_ready':False,'visit_timeout_minutes':30,'peer_urls':{}}
+              'single_node':False,'standby_ready':False,'visit_timeout_minutes':30,'peer_urls':{},
+              'device_wallet_enabled':False,'device_types':{},'bonus_mode':'shared'}
     cfg={**defaults,**(row['setting_value'] if row else {})}
     cfg.update(site_id=str(ident.get('site_code') or ''),local_post=int(ident.get('post_no') or 1))
+    if cfg['enabled'] and cfg['site_id']:
+        from .device_setup import policy_from_row,POLICY_UID
+        with db() as conn:
+            row=conn.execute('SELECT state FROM shared_wallet_cards WHERE site_id=%s AND uid=%s',(cfg['site_id'],POLICY_UID)).fetchone()
+        policy=policy_from_row(row)
+        if policy:cfg.update(device_wallet_enabled=policy['enabled'],device_types=policy['device_types'],bonus_mode=policy['bonus_mode'],device_policy=policy)
     return cfg
 
 
@@ -95,6 +103,9 @@ def store_context(cfg):
         finally:conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))',(key,))
 
 
+from .wallet_operation import timed_rpc
+
+@timed_rpc
 def rpc(cfg, post, action, payload):
     url=cfg['peer_urls'].get(str(post))
     secret=str(identity().get('site_token') or '')
@@ -104,7 +115,7 @@ def rpc(cfg, post, action, payload):
     body={'site_id':cfg['site_id'],'sender_post':cfg['local_post'],
           'timestamp':int(time.time()),'payload':payload}
     try:
-        with httpx.Client(timeout=4,trust_env=False) as client:
+        with sync_client(scope='wallet',timeout=4) as client:
             response=client.post(validate_peer_url(url)+path,json=body,
                                  headers={'X-Wallet-Signature':signature(secret,path,body)})
         data=response.json()
@@ -395,6 +406,18 @@ def internal(action:str,body:dict,x_wallet_signature:Annotated[str|None,Header()
     payload=body.get('payload')
     if not isinstance(payload,dict):raise HTTPException(422,'Payload required')
     from fastapi.responses import JSONResponse
+    if action=='owner-site':
+        # Reports and Owner settings never take the wallet journal/control lock.
+        # A slow report must not serialize NFC operations across the site.
+        from .owner_site import internal as owner_site_internal
+        from pydantic import ValidationError
+        code=200
+        try:result=owner_site_internal(payload,cfg,sender)
+        except HTTPException as exc:code=exc.status_code;result={'detail':exc.detail}
+        except ValidationError:code=422;result={'detail':'Invalid settings value'}
+        except Exception:code=503;result={'detail':'Owner site service unavailable'}
+        result={**result,'request_digest':hashlib.sha256(canonical(body)).hexdigest()}
+        return JSONResponse(result,status_code=code,headers={'X-Wallet-Signature':signature(secret,path,result)})
     if action=='operator-call':
         # Notifications must not hold the wallet lock across an HTTP request.
         code=200
@@ -429,7 +452,7 @@ def internal(action:str,body:dict,x_wallet_signature:Annotated[str|None,Header()
                     from .vip_migration import require_nodes,lock_gate
                     require_nodes(cfg)
                     with store_context(cfg) as store:lock_gate(store,cfg,f'post-{sender}')
-                result={'ok':True,'bonus_protocol':1,'vip_import_protocol':1,'primary_post':cfg['primary_post'],'standby_post':cfg['standby_post'],
+                result={'ok':True,'bonus_protocol':1,'vip_import_protocol':1,'device_wallet_protocol':2,'device_policy':cfg.get('device_policy'),'device_types':cfg.get('device_types',{}),'device_wallet_enabled':cfg.get('device_wallet_enabled',False),'bonus_mode':cfg.get('bonus_mode','shared'),'primary_post':cfg['primary_post'],'standby_post':cfg['standby_post'],
                         'generation':cfg['generation'],'local_post':cfg['local_post'],'single_node':cfg['single_node']}
             elif action=='registry':
                 if sender!=cfg['primary_post'] or payload.get('generation')!=cfg['generation']:
@@ -466,12 +489,14 @@ def internal(action:str,body:dict,x_wallet_signature:Annotated[str|None,Header()
                     from .vip_migration import require_nodes,lock_gate
                     require_nodes(cfg)
                     with store_context(cfg) as store:lock_gate(store,cfg,f'post-{sender}')
-                result={'ok':True,'bonus_protocol':1,'vip_import_protocol':1,'primary_post':cfg['primary_post'],'standby_post':cfg['standby_post'],
+                result={'ok':True,'bonus_protocol':1,'vip_import_protocol':1,'device_wallet_protocol':2,'device_policy':cfg.get('device_policy'),'device_types':cfg.get('device_types',{}),'device_wallet_enabled':cfg.get('device_wallet_enabled',False),'bonus_mode':cfg.get('bonus_mode','shared'),'primary_post':cfg['primary_post'],'standby_post':cfg['standby_post'],
                         'generation':cfg['generation'],'local_post':cfg['local_post'],'single_node':cfg['single_node'],'standby_ready':cfg.get('standby_ready',False)}
             else:
                 auth=authority(cfg)
                 with store_context(cfg) as store:
-                    if action=='diagnostics':
+                    if action=='device-policy-read':
+                        result={'ok':True,'policy':cfg.get('device_policy'),'configuration':{k:cfg[k] for k in ('primary_post','local_post','peer_urls')}}
+                    elif action=='diagnostics':
                         from .wallet_diagnostics import local_proof
                         result=local_proof(cfg,store)
                     elif action=='replica-stage':result=ReplicaReceiver(store,auth).stage(payload)
@@ -496,10 +521,21 @@ def internal(action:str,body:dict,x_wallet_signature:Annotated[str|None,Header()
                         result={'ok':True,'proof_version':2,'journal_digest':store.digest(),'state_digest':store.state_digest()}
                     elif action=='execute':
                         auth.require_primary()
+                        expected=payload.get('expected_authority')
+                        if expected is not None and expected!={k:cfg[k] for k in ('primary_post','generation')}:
+                            raise WalletConflict('Wallet authority changed during card operation')
                         command=payload.get('command',{})
                         allowed={'reserve_load','accept_load','open_post','checkpoint','prepare_return','complete_return','register_payment','wallet_credit','grant_vip','checkpoint_vip','return_vip'}
                         if command.get('post_no')!=sender or command.get('action') not in allowed:
                             raise WalletConflict('Command is not permitted for this post endpoint')
+                        if 'wallet_protocol' in command:
+                            if command.get('wallet_protocol')!=2 or not cfg.get('device_wallet_enabled'):
+                                raise WalletConflict('Device wallet has not been commissioned')
+                            expected=cfg.get('device_types',{}).get(str(sender),'wash')
+                            if command.get('device_type')!=expected:
+                                raise WalletConflict('Post device type differs from commissioned inventory')
+                            from .wallet_client import require_device_wallet_support
+                            require_device_wallet_support(cfg,local_capability=True)
                         if command.get('action')=='grant_vip':
                             from .vip_migration import guard_grant
                             guard_grant(store,cfg)
@@ -514,7 +550,11 @@ def internal(action:str,body:dict,x_wallet_signature:Annotated[str|None,Header()
                                 if old!=incoming:raise WalletConflict('Operation ID reused with different contents')
                                 command=existing['command']
                         from .wash_logic import wash_runtime
-                        policy=WalletPolicy(cfg['visit_timeout_minutes'],int(wash_runtime.params['freePauseSeconds']*1000),int(wash_runtime.params['tariffs']['water']['amountSum']),int(wash_runtime.params['tariffs']['water']['durationSeconds']))
+                        if command.get('wallet_protocol')==2:
+                            from .wallet_devices import site_policy
+                            policy=site_policy(cfg)
+                        else:
+                            policy=WalletPolicy(cfg['visit_timeout_minutes'],int(wash_runtime.params['freePauseSeconds']*1000),int(wash_runtime.params['tariffs']['water']['amountSum']),int(wash_runtime.params['tariffs']['water']['durationSeconds']))
                         result=coordinator(store,cfg).execute(payload['operation_id'],payload['uid'],command,policy)
                     elif action=='customer-registry':
                         auth.require_primary()

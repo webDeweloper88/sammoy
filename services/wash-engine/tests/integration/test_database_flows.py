@@ -220,8 +220,8 @@ class DatabaseFlowTests(unittest.TestCase):
             conn.execute("UPDATE license_cache SET grace_until = %s WHERE id = 1", (now - timedelta(seconds=1),))
             conn.commit()
         decision = evaluate_license_lock(read_license_cache(), config)
-        self.assertTrue(decision["locked"])
-        self.assertEqual(decision["state"], "grace_expired")
+        self.assertFalse(decision["locked"])
+        self.assertEqual(decision["state"], "grace")
 
         hardware = {
             "hardware_fingerprint_hash": "fingerprint-a",

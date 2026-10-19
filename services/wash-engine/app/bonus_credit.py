@@ -30,7 +30,7 @@ def accept(runtime,amount,key,raw,bonus_override=None):
         conn.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))',(key,))
         prior=conn.execute('SELECT id FROM payments WHERE idempotency_key=%s',(key,)).fetchone()
         if prior:return
-        conn.execute("INSERT INTO payments(wash_session_id,provider,status,amount_sum,bonus_sum,idempotency_key,raw_payload,credited_at) VALUES(%s,'click','credited',%s,%s,%s,%s,now())",(sid,amount,bonus,key,Jsonb({**(raw or {}),'bonus_sum':bonus})))
+        conn.execute("INSERT INTO payments(wash_session_id,provider,status,amount_sum,bonus_sum,idempotency_key,raw_payload,credited_at) VALUES(%s,'click','credited',%s,%s,%s,%s,now())",(sid,amount,bonus,key,Jsonb({**(raw or {}),'bonus_sum':bonus,'bonus_domain':runtime.params.get('bonusDomain','shared')})))
         conn.execute("UPDATE wash_sessions SET paid_sum=paid_sum+%s,final_credit_sum=%s,bonus_granted_sum=bonus_granted_sum+%s,bonus_remaining_sum=%s,status='running',runtime_seen_at=now() WHERE id=%s",(amount,int(ceil(total)),bonus,bonus_total,sid))
         runtime._click_credit_pending=key
         conn.commit()

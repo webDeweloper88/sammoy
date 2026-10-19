@@ -5,8 +5,10 @@ for(let i=0;i<100;i++){try{await fetch(origin);break}catch{await new Promise(r=>
 browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});const page=await browser.newPage({viewport:{width:1920,height:1080},hasTouch:true});page.setDefaultTimeout(12000);const errors=[];page.on('pageerror',e=>errors.push(e.message));let credit=1744,claimed=false,completed=false,walletEnabled=false,rolesSaved=false,networkApplied=false,networkConfirmed=false;let telegram={configured:false,enabled:false,owner_paired:false,identity_configured:true,posts:[]},telegramConfigured=false,telegramPairing=false;let network={interfaces:[{interface:'eth0',connected:true,address:'10.10.10.8',prefix:24,mode:'dhcp'}],pending:null};
 const state={ok:true,hardware:{complete:true},io_ready:true,commissioning:{complete:false},site:{site_code:'',post_no:1,gateway_url:'https://gateway.example.com'},license:{locked:false}};
 await page.route('**/api/**',async route=>{const req=route.request(),path=new URL(req.url()).pathname;let data;
-if(path==='/api/wash/state')data={state:{activeMode:null,creditSum:credit}};
+if(path==='/api/wash/state')data={state:{activeMode:null,creditSum:credit},parameters:{topUpBonus:{enabled:false,percent:10}}};
 else if(path==='/api/commissioning/status')data=state;
+else if(path==='/api/commissioning/device-policy')data={ok:true,policy:null,configuration:{primary_post:1,local_post:1,peer_urls:{1:'http://10.10.10.8',7:'http://10.10.10.9'}}};
+else if(path==='/api/commissioning/device')data={active_type:'wash',requested:{type:'wash',display_name:''}};
 else if(path==='/api/commissioning/state')data={ok:true,complete:completed};
 else if(path==='/api/commissioning/telegram/status')data=telegram;
 else if(path==='/api/commissioning/telegram/configure-auto'){assert.equal(req.postDataJSON().token,'123:INSTALL_TEST');telegramConfigured=true;telegram={...telegram,configured:true,enabled:true,bot_username:'test_install_bot'};data=telegram;}

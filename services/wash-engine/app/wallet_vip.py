@@ -3,10 +3,12 @@ from uuid import uuid4
 from psycopg.types.json import Jsonb
 from .db import db
 from .wallet_domain import WalletConflict
-from .wallet_post import pending_job,assignment,freeze,set_job,apply_load,apply_return,pause_millis
+from .wallet_post import pending_job,assignment,freeze,set_job,apply_load,apply_return,pause_millis,protocol_fields
 from . import wallet_client
+from .wallet_operation import card_operation
 
 
+@card_operation()
 def handle_card(runtime,uid,event):
     runtime.state['walletTransferVip']=True
     job=pending_job();ctx=assignment()
@@ -27,11 +29,13 @@ def handle_card(runtime,uid,event):
         else:
             p={'stage':'grant','is_vip':True,'post_no':cfg['local_post'],'assignment_id':uuid4().hex,'visit_id':uuid4().hex}
             kind='load'
+        p.update(protocol_fields(runtime,cfg,wallet_client.inspect(uid),ctx))
         job_id=uuid4().hex
         with db() as conn:
             conn.execute('INSERT INTO shared_wallet_post_jobs(id,uid,kind,payload) VALUES(%s,%s,%s,%s)',(job_id,uid,kind,Jsonb(p)));conn.commit()
         job={'id':job_id,'uid':uid,'kind':kind,'payload':p}
     freeze(runtime);p=job['payload'];base={'post_no':p['post_no'],'assignment_id':p['assignment_id']}
+    if p.get('wallet_protocol')==2:base.update({k:p[k] for k in ('wallet_protocol','device_type','bonus_domain')})
     def remote(step,command):return wallet_client.execute(job['id']+':'+step,uid,{**base,**command})['result']
     if job['kind']=='load':
         if p['stage']=='grant':

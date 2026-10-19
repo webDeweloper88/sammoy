@@ -203,3 +203,59 @@ class PostAdapterTests(unittest.TestCase):
         from app.wallet_domain import WalletConflict
         with self.assertRaises(WalletConflict):self.wallet.execute('second-vip','VIP',{'post_no':7,'assignment_id':'second','action':'grant_vip','visit_id':'second-visit'},WalletPolicy())
         for node in (1,2):self.assertEqual(self.nodes[node][0].execute("SELECT sum(used) AS uses FROM shared_wallet_vip_uses WHERE uid='VIP'").fetchone()['uses'],1)
+
+    def test_typed_card_nfc_roundtrip_and_other_device_keep_pause_budgets(self):
+        self.wallet.execute('migrate','CARD',{'wallet_protocol':2,'device_type':'wash','action':'migrate_device_wallet'},WalletPolicy())
+        self.tap();self.assertEqual(wallet_post.assignment()['wallet_protocol'],2)
+        self.runtime.state['_pauseBudgetFloat']=10;self.runtime.state['freePauseRemaining']=10
+        self.tap();self.runtime=wash_logic.WashRuntime('dry_fog');self.runtime.shared_wallet_enabled=True
+        self.runtime._apply_output_sync=lambda output:self.assertIsNone(output)
+        self.post_no=7;self.tap()
+        self.assertEqual(self.runtime.state['creditSum'],35000)
+        self.assertEqual(self.runtime.state['freePauseRemaining'],300)
+        self.runtime.state['_pauseBudgetFloat']=200;self.runtime.state['freePauseRemaining']=200
+        self.tap();self.runtime=wash_logic.WashRuntime();self.runtime.shared_wallet_enabled=True
+        self.runtime._apply_output_sync=lambda output:self.assertIsNone(output)
+        self.post_no=2;self.tap();self.assertEqual(self.runtime.state['freePauseRemaining'],10)
+        self.assertEqual(self.primary.inspect('CARD'),self.backup.inspect('CARD'))
+
+    def test_typed_late_click_keeps_origin_device_and_bonus_after_session_ends(self):
+        self.wallet.execute('migrate','CARD',{'wallet_protocol':2,'device_type':'wash','action':'migrate_device_wallet'},WalletPolicy())
+        self.tap();origin=self.runtime.active_session_id
+        intent=uuid4();gateway=uuid4()
+        row=self.local.execute("INSERT INTO click_payment_intents(id,gateway_intent_id,amount_sum,bonus_sum,status,wallet_origin_session_id,wallet_origin_uid) VALUES(%s,%s,20000,2000,'paid',%s,'CARD') RETURNING *",(intent,gateway,origin)).fetchone();self.local.commit()
+        self.tap();self.runtime=wash_logic.WashRuntime('dry_fog');self.runtime.shared_wallet_enabled=True
+        self.runtime._apply_output_sync=lambda output:self.assertIsNone(output)
+        self.post_no=7;self.tap();balance=self.runtime.state['creditSum']
+        self.assertEqual(wallet_payments.credit_confirmed(self.runtime,row),'wallet')
+        self.assertEqual(wallet_payments.credit_confirmed(self.runtime,row),'wallet')
+        self.assertEqual(self.runtime.state['creditSum'],balance)
+        state=self.primary.inspect('CARD')['state']
+        self.assertEqual(state['wallet_sum'],22000);self.assertEqual(state['device_wallet']['wallet_bonus']['shared'],2000)
+        self.assertEqual(self.primary.inspect('CARD'),self.backup.inspect('CARD'))
+
+    def test_typed_vip_nfc_crosses_device_types_with_one_daily_use(self):
+        self.wallet.execute('typed-vip','VIP',{'wallet_protocol':2,'device_type':'wash','action':'configure_vip',
+            'profile':{'id':1,'code':'VIP','name':'VIP','enabled':True,'grant_seconds':600,'max_uses_per_day':1,'device_types':['wash','dry_fog']}},WalletPolicy())
+        wallet_vip.handle_card(self.runtime,'VIP',{})
+        self.runtime._charge_active_locked('water',240)
+        self.runtime.state['_pauseBudgetFloat']=10;self.runtime.state['freePauseRemaining']=10
+        wallet_vip.handle_card(self.runtime,'VIP',{})
+        self.runtime=wash_logic.WashRuntime('dry_fog');self.runtime.shared_wallet_enabled=True
+        self.runtime._apply_output_sync=lambda output:self.assertIsNone(output)
+        self.post_no=7;wallet_vip.handle_card(self.runtime,'VIP',{})
+        self.assertEqual(self.runtime.state['creditSum'],360000)
+        self.assertEqual(self.runtime.state['freePauseRemaining'],300)
+        self.assertEqual(self.nodes[1][0].execute("SELECT sum(used) AS uses FROM shared_wallet_vip_uses WHERE uid='VIP'").fetchone()['uses'],1)
+        self.assertEqual(self.primary.inspect('VIP'),self.backup.inspect('VIP'))
+
+    def test_foreign_bonus_only_card_does_not_create_a_stuck_transfer_job(self):
+        self.wallet.execute('restricted-only','ONLYBONUS',{'wallet_protocol':2,'device_type':'wash','action':'wallet_credit',
+            'source':'cash','receipt_id':'onlybonus','amount_sum':0,'bonus_sum':1000,'bonus_domain':'wash'},WalletPolicy(bonus_mode='separate'))
+        self.runtime=wash_logic.WashRuntime('dry_fog');self.runtime.shared_wallet_enabled=True
+        self.runtime._apply_output_sync=lambda output:self.assertIsNone(output)
+        wallet_post.handle_card(self.runtime,'ONLYBONUS',{})
+        self.assertFalse(self.runtime.state['walletTransferPending'])
+        self.assertIsNone(wallet_post.pending_job())
+        self.assertEqual(self.runtime.state['creditSum'],0)
+        self.assertEqual(self.primary.inspect('ONLYBONUS')['state']['wallet_sum'],1000)

@@ -128,7 +128,8 @@ class CashIngestTests(unittest.TestCase):
         with patch.object(wallet_payments,'db',self.fake_db),patch.object(wallet_post,'assignment',return_value=None),\
              patch.object(wallet_payments.wallet_client,'enabled',return_value=True),\
              patch.object(wallet_payments.wallet_client,'discover_configuration',return_value={'local_post':1}),\
-             patch.object(wallet_payments.wallet_client,'execute',rpc):
+             patch.object(wallet_payments.wallet_client,'execute',rpc),\
+             patch.object(wallet_payments.wallet_client,'inspect',return_value=None):
             with self.assertRaises(RuntimeError):wallet_payments.restore_recovery(recovery,'CARD','owner')
             wallet_payments.restore_recovery(recovery,'CARD','owner')
         self.assertEqual(rpc.call_args_list[0],rpc.call_args_list[1])

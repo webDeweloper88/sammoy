@@ -3,3 +3,6 @@ services:
   io-helper:
     volumes:
       - ./config/io-map.dry-fog.yaml:/config/io-map.yaml:ro
+  wash-engine:
+    environment:
+      WASH_ENGINE_DEVICE_TYPE: dry_fog

@@ -58,7 +58,7 @@ def capture(runtime,io,*,recover=False):
             available=amount+bonus
             held=bool(recover or runtime.state.get('licenseLocked') or runtime.active_session_source=='vip'
                       or runtime.state.get('walletTransferPending'))
-            payload={'bonus_sum':bonus,'nv9_stream_id':stream,'first_pulse':previous+1,'rising_count':total,'sum_per_pulse':price,
+            payload={'bonus_sum':bonus,'bonus_domain':runtime.params.get('bonusDomain','shared'),'nv9_stream_id':stream,'first_pulse':previous+1,'rising_count':total,'sum_per_pulse':price,
                      'held_reason':'restart_or_io_fault' if recover else ('license_locked' if runtime.state.get('licenseLocked') else ('vip' if runtime.active_session_source=='vip' else 'wallet_transfer_pending')) if held else None}
             receipt=f'nv9:{stream}:{previous+1}:{total}'
             if held:

@@ -12,6 +12,7 @@ from .bonus import remaining as bonus_remaining
 from .wallet_domain import WalletConflict
 from .wallet_replication import WalletUnavailable
 from . import wallet_client
+from .wallet_operation import card_operation
 
 POST_SCHEMA_SQL='''
 CREATE TABLE IF NOT EXISTS shared_wallet_post_jobs (
@@ -54,7 +55,7 @@ def funding_since(session_id,cursor,post_no):
         rows=conn.execute("SELECT id,provider,amount_sum,idempotency_key,raw_payload,bonus_sum FROM payments WHERE wash_session_id=%s AND id>%s AND provider IN ('cash','click') AND status='credited' ORDER BY id",
                           (session_id,cursor)).fetchall()
     return [{'id':r['idempotency_key'] if str(r.get('idempotency_key') or '').startswith('nv9:') else (r.get("raw_payload") or {}).get("wallet_receipt_id") or f"post:{post_no}:payment:{r['id']}",
-             'source':r['provider'],'amount_sum':int(r['amount_sum']),**({'bonus_sum':int(r['bonus_sum'])} if r.get('bonus_sum') else {})} for r in rows]
+             'source':r['provider'],'amount_sum':int(r['amount_sum']),**({'bonus_sum':int(r['bonus_sum'])} if r.get('bonus_sum') else {}),**({'bonus_domain':r['raw_payload']['bonus_domain']} if (r.get('raw_payload') or {}).get('bonus_domain') else {})} for r in rows]
 
 
 def pause_millis(runtime):
@@ -66,6 +67,9 @@ def pause_millis(runtime):
 def freeze(runtime):
     runtime.state.update(walletTransferPending=True,selectedMode='pause',activeMode=None,requestedOutput=None,
                          phase='wallet_transfer_pending',resumeRequiresTriggerReset=bool(runtime.state.get('totalStopActive')))
+    publish = getattr(runtime, '_publish_wallet_pending_locked', None)
+    if publish is not None:
+        publish()
     # Force an actual OFF acknowledgement even if cached last_output is None.
     runtime.last_output='wallet-off-confirmation'
     runtime._apply_output_sync(None)
@@ -73,6 +77,16 @@ def freeze(runtime):
     runtime._heartbeat_session_locked()
 
 
+def protocol_fields(runtime,cfg,card=None,ctx=None):
+    """Capture protocol/type in the durable job, never infer it during retries."""
+    if not ((ctx or {}).get('wallet_protocol')==2 or ((card or {}).get('state') or {}).get('device_wallet') or getattr(runtime,'device_type','wash')=='dry_fog'):
+        return {}
+    kind=getattr(runtime,'device_type','wash')
+    if (ctx or {}).get('device_type',kind)!=kind:raise WalletConflict('Device type changed during an assigned session')
+    return {'wallet_protocol':2,'device_type':kind,'bonus_domain':(ctx or {}).get('bonus_domain','shared' if cfg.get('bonus_mode','shared')=='shared' else kind)}
+
+
+@card_operation()
 def handle_card(runtime,uid,event):
     job=pending_job()
     if job and job['uid']!=uid:
@@ -109,8 +123,20 @@ def handle_card(runtime,uid,event):
                 runtime.state['walletTransferPending']=False
                 runtime.state['lastRfidStatus']='card_in_use' if card and (card['state'].get('assignment') or not card['available']) else 'customer_card_seen'
                 return
+            typed=card['state'].get('device_wallet')
+            if typed:
+                device=getattr(runtime,'device_type','wash')
+                other='wash' if device=='dry_fog' else 'dry_fog'
+                available=card['state']['wallet_sum']-typed['wallet_bonus'][other]
+                if available<=0:
+                    runtime.state.update(walletTransferPending=False,lastRfidStatus='bonus_not_available_for_device')
+                    return
             payload={'stage':'reserve','post_no':cfg['local_post'],'assignment_id':uuid4().hex,'visit_id':uuid4().hex}
             kind='load'
+        card=wallet_client.inspect(uid) if kind=='return' else card
+        payload.update(protocol_fields(runtime,cfg,card,ctx))
+        if payload.get('wallet_protocol')==2:
+            for receipt in payload.get('funding',[]):receipt.setdefault('bonus_domain',payload['bonus_domain'])
         job_id=uuid4().hex
         with db() as conn:
             conn.execute('INSERT INTO shared_wallet_post_jobs(id,uid,kind,payload) VALUES(%s,%s,%s,%s)',(job_id,uid,kind,Jsonb(payload)));conn.commit()
@@ -125,6 +151,7 @@ def handle_card(runtime,uid,event):
 
 def resume_job(runtime,job):
     p=job['payload'];base={'post_no':p['post_no'],'assignment_id':p['assignment_id']}
+    if p.get('wallet_protocol')==2:base.update({k:p[k] for k in ('wallet_protocol','device_type','bonus_domain')})
     def remote(step,command):
         return wallet_client.execute(job['id']+':'+step,job['uid'],{**base,**command})['result']
     if job['kind']=='load':
@@ -152,6 +179,7 @@ def resume_job(runtime,job):
 
 def apply_load(runtime,job):
     p=job['payload'];amount=p['amount_sum'];source='vip' if p.get('is_vip') else 'card';ctx={'is_vip':bool(p.get('is_vip')),'uid':job['uid'],'assignment_id':p['assignment_id'],'visit_id':p['visit_id'],'post_no':p['post_no']}
+    if p.get('wallet_protocol')==2:ctx.update({k:p[k] for k in ('wallet_protocol','device_type','bonus_domain')})
     with db() as conn:
         conn.execute("INSERT INTO rfid_cards(uid,card_type,status,enabled,balance_sum) VALUES(%s,%s,'active',true,0) ON CONFLICT DO NOTHING",(job['uid'],'vip' if p.get('is_vip') else 'customer'))
         extra=int(runtime.state.get('creditSum') or 0)
@@ -193,7 +221,7 @@ def apply_return(runtime,job):
         extra=extra_money+extra_bonus
         conn.execute("INSERT INTO rfid_cards(uid,card_type,status,enabled,balance_sum) VALUES(%s,%s,'active',true,0) ON CONFLICT DO NOTHING",(job['uid'],'vip' if p.get('is_vip') else 'customer'))
         conn.execute("UPDATE wash_sessions SET status='ended',finished_at=now(),ended_at=now(),final_credit_sum=%s,paid_sum=GREATEST(0,paid_sum-%s),close_reason='saved_to_shared_wallet',metadata=metadata || %s WHERE id=%s",
-                     (amount if p.get('is_vip') else 0,extra_money,Jsonb({'wallet_uid':job['uid'],'wallet_return_operation':job['id']}),session))
+                     (amount if p.get('is_vip') else 0,extra_money,Jsonb({'wallet_uid':job['uid'],'wallet_return_operation':job['id'],**({'device_wallet_origin':{k:p[k] for k in ('wallet_protocol','device_type','bonus_domain')}} if p.get('wallet_protocol')==2 else {})}),session))
         conn.execute('UPDATE wash_sessions SET bonus_remaining_sum=0 WHERE id=%s',(session,))
         new_session=None
         if extra:

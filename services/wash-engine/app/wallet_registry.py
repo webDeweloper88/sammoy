@@ -20,6 +20,11 @@ def read_registry():
 def owner_operation(store,cfg,uid,command):
     current=store.inspect(uid)
     revision=current['state']['revision'] if current else 0
+    if not uid.startswith('@') and ((current and current['state'].get('device_wallet')) or set(command.get('profile',{}).get('device_types',['wash']))!={'wash'}):
+        if not cfg.get('device_wallet_enabled'):raise WalletConflict('Сначала настройте типы устройств в общем кошельке')
+        from .wallet_client import require_device_wallet_support
+        require_device_wallet_support(cfg,local_capability=True)
+        command={**command,'wallet_protocol':2,'device_type':'wash'}
     op='owner:'+hashlib.sha256(canonical({'uid':uid,'revision':revision,'command':command})).hexdigest()
     return coordinator(store,cfg).execute(op,uid,command,WalletPolicy(cfg['visit_timeout_minutes']))
 
@@ -30,7 +35,12 @@ def save_profiles(payload,user):
         current=profile_value(store);ids={p['code']:p['id'] for p in current};next_id=max([p['id'] for p in current]+[0])+1
         values=[];codes=set();profile_ids=set()
         for item in payload.profiles:
-            p=item.model_dump();p['code']=p['code'].strip().upper();p['name']=p['name'].strip()
+            p=item.model_dump()
+            if 'dry_fog' in p.get('device_types',[]):
+                if not cfg.get('device_wallet_enabled'):raise WalletConflict('Сначала настройте типы устройств в общем кошельке')
+                from .wallet_client import require_device_wallet_support
+                require_device_wallet_support(cfg,local_capability=True)
+            p['code']=p['code'].strip().upper();p['name']=p['name'].strip()
             if not p['code'] or not p['name'] or p['code'] in codes:raise WalletConflict('Проверьте названия и уникальные коды VIP-профилей')
             if p.get('id') is None:
                 p['id']=ids.get(p['code'],next_id)

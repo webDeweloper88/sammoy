@@ -19,7 +19,7 @@ export function useWashState(){
    const results=await Promise.allSettled([api('/api/kiosk/settings',{signal:AbortSignal.timeout(3000)}),api('/api/kiosk/payment-options',{signal:AbortSignal.timeout(3000)})])
    if(!stopped){if(results[0].status==='fulfilled')station.value=results[0].value.station;config.value=results[0].status==='fulfilled'?results[0].value.config:null;paymentOptions.value=results[1].status==='fulfilled'?results[1].value:null}
   }
-  if(!stopped)timer=setTimeout(poll,500)
+  if(!stopped)timer=setTimeout(poll,250)
  }
  async function select(mode){
   // Pause remains callable during an I/O failure; never queue or retry a start.

@@ -68,6 +68,19 @@ class WalletApiTests(unittest.TestCase):
             response=self.call('execute',{'uid':'CARD','operation_id':'id','command':{'action':'reserve_load','post_no':7}},sender=2)
             self.assertEqual(response.status_code,409);coordinator.assert_not_called()
 
+    def test_card_operation_rejects_changed_authority_before_money_command(self):
+        self.cfg['local_post']=1
+        @contextmanager
+        def fake(cfg):
+            store=MagicMock();store._operation.return_value=None;yield store
+        with patch.object(api,'store_context',fake),patch.object(api,'coordinator') as coordinator:
+            response=self.call('execute',{'uid':'CARD','operation_id':'id',
+                'expected_authority':{'primary_post':1,'generation':1},
+                'command':{'action':'reserve_load','post_no':2}},sender=2)
+            self.assertEqual(response.status_code,409)
+            self.assertIn('authority changed',response.json()['detail'])
+            coordinator.assert_not_called()
+
     def test_owner_and_installer_permissions_and_password_change(self):
         self.assertEqual(self.client.get('/api/owner/wallet').status_code,401)
         self.app.dependency_overrides[current_user]=lambda:{'role':'admin','login':'admin','must_change_password':False}
@@ -232,7 +245,7 @@ class RpcConflictTests(unittest.TestCase):
             response.json.return_value=data
             response.headers={'X-Wallet-Signature':api.signature('test-secret','/api/wallet/internal/execute',data)}
             return response
-        with patch.object(api,'identity',return_value={'site_token':'test-secret'}),patch.object(api.httpx,'Client') as client:
+        with patch.object(api,'identity',return_value={'site_token':'test-secret'}),patch.object(api,'sync_client') as client:
             client.return_value.__enter__.return_value.post.side_effect=respond
             with self.assertRaises(WalletConflict) as raised:
                 api.rpc(cfg,1,'execute',{})

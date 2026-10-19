@@ -120,3 +120,12 @@
 .dry-fog-design .wash-optional button strong{font-size:calc(24 * var(--u))!important;line-height:1.15}
 .dry-fog-design .wash-optional button .mode-photo{object-position:75% center}
 .dry-fog-design .wash-topup .topup-title strong{font-size:calc(30 * var(--u));text-transform:none}
+
+/* Blackening stays charcoal; a crisp silver edge carries the active state. */
+.wash-kiosk[data-design=cards] .dry-fog-design .wash-optional button[data-program=blackening].running{border-color:#d4e0e9;box-shadow:inset 0 0 0 calc(3 * var(--u)) #aabcca,0 0 0 calc(2 * var(--u)) #182431;color:#fff}
+.wash-kiosk[data-design=cards] .dry-fog-design .wash-optional button[data-program=blackening].running::before{background:linear-gradient(90deg,#10151bf5,#161c24e8)}
+
+.wash-kiosk[data-design=cards] .dry-fog-design .wash-optional .extra-active-badge{display:flex;align-items:center;gap:calc(10 * var(--u));width:fit-content;background:#fff;color:#101b25!important;padding:calc(5 * var(--u)) calc(12 * var(--u));border-radius:calc(6 * var(--u));font-size:calc(21 * var(--u));font-weight:800;letter-spacing:.04em}
+.wash-kiosk[data-design=cards] .dry-fog-design .wash-optional .extra-active-badge>span{display:inline;font-size:calc(27 * var(--u));line-height:1}
+.wash-kiosk[data-design=cards] .dry-fog-design .wash-optional.has-running-extra button:not(.running){opacity:.65}
+.wash-kiosk[data-design=cards] .dry-fog-design .wash-optional.has-running-extra button.running{border-width:calc(3 * var(--u))}

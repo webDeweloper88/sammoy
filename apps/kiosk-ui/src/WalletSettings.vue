@@ -1,4 +1,5 @@
 <script setup>
+import DevicePolicy from './DevicePolicy.vue'
 import {ref,onMounted,watch} from 'vue'
 import {api} from './api'
 import {walletTranslations as translations} from './wallet-texts.js'
@@ -6,19 +7,20 @@ const emit=defineEmits(['dirty','saved'])
 const props=defineProps({token:String,install:Boolean,admin:Boolean,language:{type:String,default:'ru'}})
 const status=ref(null),error=ref(''),notice=ref(''),busy=ref(false),minutes=ref(30),primary=ref(1),standby=ref(7),peers=ref([]),fenced=ref(false),single=ref(false),confirmation=ref('')
 const migrateLocal=ref(false),migrationConfirmation=ref(''),migrateVip=ref(false),vipConfirmation=ref('')
-const diagnostics=ref(null)
+const diagnostics=ref(null),policyDirty=ref(false),settingsDirty=ref(false)
+function policyChanged(value){policyDirty.value=value;emit('dirty',value||settingsDirty.value)}
 const recovery=ref([]),recoveryId=ref(null),recoveryUid=ref('')
 const tr=text=>translations[text]?.[props.language]||text
 const reason=value=>tr(({nv9_uncertain_owner:"Наличные для восстановления",cash_during_vip:"Наличные во время VIP",late_click_payment:"Запоздавший Click"})[value]||value)
 const endpoint=()=>props.install?'/api/commissioning/wallet':props.admin?'/api/admin/wallet':'/api/owner/wallet'
 const request=(url,options={})=>api(url,{token:props.token,...options})
 const post=(url,data={})=>request(url,{method:'POST',body:JSON.stringify(data)})
-watch(()=>JSON.stringify([minutes.value,primary.value,standby.value,peers.value,fenced.value,single.value,confirmation.value,recoveryUid.value,migrateLocal.value,migrationConfirmation.value,migrateVip.value,vipConfirmation.value]),()=>{if(!busy.value)emit('dirty',true)},{flush:'sync'})
-async function load(){diagnostics.value=null;status.value=await request(endpoint());const c=status.value.configuration;minutes.value=c.visit_timeout_minutes;primary.value=c.primary_post;standby.value=c.standby_post||7;peers.value=Object.entries(c.peer_urls).map(([post,url])=>({post:Number(post),url}));if(!peers.value.length)peers.value=[...new Set([1,7,c.local_post])].map(post=>({post,url:''}));emit('dirty',false)}
+watch(()=>JSON.stringify([minutes.value,primary.value,standby.value,peers.value,fenced.value,single.value,confirmation.value,recoveryUid.value,migrateLocal.value,migrationConfirmation.value,migrateVip.value,vipConfirmation.value]),()=>{if(!busy.value){settingsDirty.value=true;emit('dirty',true)}},{flush:'sync'})
+async function load(){diagnostics.value=null;status.value=await request(endpoint());const c=status.value.configuration;minutes.value=c.visit_timeout_minutes;primary.value=c.primary_post;standby.value=c.standby_post||7;peers.value=Object.entries(c.peer_urls).map(([post,url])=>({post:Number(post),url}));if(!peers.value.length)peers.value=[...new Set([1,7,c.local_post])].map(post=>({post,url:''}));settingsDirty.value=false;emit('dirty',policyDirty.value)}
 const diagnosticState=value=>tr(({'in-sync':'Данные совпадают','not-configured':'Кошелёк не настроен','single-copy':'Работа с одной копией','unavailable':'Один из узлов недоступен','authority-mismatch':'Роли узлов не совпадают','protocol-mismatch':'Обновите оба узла','pending':'Есть незавершённые операции','differs':'Данные различаются — повторите проверку'})[value]||value)
 async function diagnose(){diagnostics.value=await request('/api/owner/wallet/diagnostics')}
 async function loadRecovery(){recovery.value=(await request('/api/owner/wallet/recovery')).credits}
-async function restore(){if(!recoveryId.value||!/^[0-9A-Fa-f]{4,64}$/.test(recoveryUid.value))throw Error('Выберите остаток и укажите UID денежной карты');await post('/api/owner/wallet/recovery/'+recoveryId.value,{uid:recoveryUid.value.toUpperCase()});await loadRecovery();recoveryId.value=null;recoveryUid.value='';emit('dirty',false);notice.value='Остаток переведён в кошелёк карты.'}
+async function restore(){if(!recoveryId.value||!/^[0-9A-Fa-f]{4,64}$/.test(recoveryUid.value))throw Error('Выберите остаток и укажите UID денежной карты');await post('/api/owner/wallet/recovery/'+recoveryId.value,{uid:recoveryUid.value.toUpperCase()});await loadRecovery();recoveryId.value=null;recoveryUid.value='';settingsDirty.value=false;emit('dirty',policyDirty.value);notice.value='Остаток переведён в кошелёк карты.'}
 async function run(fn){if(busy.value)return;busy.value=true;error.value='';notice.value='';try{await fn()}catch(e){error.value=e.message}finally{busy.value=false}}
 async function setup(){const rows={};for(const p of peers.value){if(!Number.isInteger(p.post)||p.post<1||p.post>100||rows[p.post])throw Error('Проверьте номера постов: 1–100, без повторов');rows[p.post]=p.url.trim()}await post(props.install?endpoint():'/api/admin/wallet/setup',{primary_post:primary.value,standby_post:standby.value,peer_urls:rows,migrate_local_balances:migrateLocal.value,migration_confirmation:migrationConfirmation.value,migrate_local_vip:migrateVip.value,vip_migration_confirmation:vipConfirmation.value});await load();emit('saved');notice.value='Роли сохранены. Настройте второй узел и выполните синхронизацию на главном.'}
 async function timeout(){await post('/api/owner/wallet/timeout',{visit_timeout_minutes:minutes.value});await load();notice.value='Время визита сохранено. Изменение действует для новых визитов.'}
@@ -27,6 +29,7 @@ async function sync(){await post('/api/owner/wallet/synchronize');await load();n
 onMounted(()=>run(load))
 </script>
 <template>
+<DevicePolicy v-if="!admin&&status?.configuration?.enabled" :install="install" :token="token" :language="language" @dirty="policyChanged"/>
 <section class="card content wallet-settings"><h2>{{ tr("Общий кошелёк и резервный пост") }}</h2>
 <p v-if="error" class="message error" role="alert">{{tr(error)}}</p><p v-if="notice" class="message success" role="status">{{tr(notice)}}</p>
 <p v-if="busy" role="status">{{ tr("Проверка…") }}</p><button class="quiet" :disabled="busy" @click="run(load)">{{ tr("Обновить состояние") }}</button>

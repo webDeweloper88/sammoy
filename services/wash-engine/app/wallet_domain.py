@@ -27,8 +27,18 @@ class WalletPolicy:
     free_pause_millis: int = 60_000
     water_amount_sum: int = 1000
     water_duration_seconds: int = 40
+    dry_fog_pause_millis: int = 300_000
+    dry_fog_amount_sum: int = 1000
+    dry_fog_duration_seconds: int = 1
+    bonus_mode: str = 'shared'
 
     def __post_init__(self):
+        if any(type(v) is not int or v <= 0 for v in (self.dry_fog_amount_sum,self.dry_fog_duration_seconds)):
+            raise WalletConflict('Invalid dry-fog VIP reference tariff')
+        if self.bonus_mode not in {'shared','separate'}:
+            raise WalletConflict('Invalid bonus mode')
+        if type(self.dry_fog_pause_millis) is not int or not 0 <= self.dry_fog_pause_millis <= 86_400_000:
+            raise WalletConflict('Invalid dry-fog pause budget')
         if type(self.visit_timeout_minutes) is not int or not 1 <= self.visit_timeout_minutes <= 1440:
             raise WalletConflict("Visit timeout must be 1–1440 minutes")
         if type(self.free_pause_millis) is not int or not 0 <= self.free_pause_millis <= 86_400_000:
@@ -59,8 +69,13 @@ class WalletState:
     # Old intent IDs retain a visit binding; registration happens before payment.
     payment_intents: dict = field(default_factory=dict)
     funding_receipts: dict = field(default_factory=dict)
+    # Omitted from v1 snapshots. Old nodes cannot deserialize a v2 snapshot.
+    device_wallet: dict | None = None
 
     def validate(self):
+        if self.device_wallet is not None:
+            from .wallet_devices import validate_typed
+            validate_typed(self)
         if not isinstance(self.uid, str) or not self.uid or len(self.uid) > 80:
             raise WalletConflict("Invalid card UID")
         for name in ("wallet_sum", "spent_sum", "external_income_sum", "opening_sum", "revision", "wallet_bonus_sum", "bonus_issued_sum", "bonus_spent_sum"):
@@ -91,6 +106,16 @@ class WalletState:
 
 def apply_command(state: WalletState, command: dict, *, now: datetime,
                   policy: WalletPolicy) -> tuple[WalletState, dict]:
+    if state.device_wallet is not None or 'wallet_protocol' in command:
+        from .wallet_devices import apply_typed
+        return apply_typed(state, command, now=now, policy=policy)
+    if command.get('device_type', 'wash') != 'wash':
+        raise WalletConflict('Dry fog requires wallet protocol 2')
+    return _apply_command_v1(state, command, now=now, policy=policy)
+
+
+def _apply_command_v1(state: WalletState, command: dict, *, now: datetime,
+                  policy: WalletPolicy, reserve_amount=None, reserve_bonus=None) -> tuple[WalletState, dict]:
     """Return a new state; rejected commands cannot mutate the original.
 
     Operation-ID idempotency and serialization are enforced by the repository.
@@ -113,9 +138,10 @@ def apply_command(state: WalletState, command: dict, *, now: datetime,
     def bonus_amount(value):
         if type(value) is not int or value<0:raise WalletConflict('Invalid bonus amount')
         return value
-    def receipt_value(source,amount,assignment_id,bonus):
+    def receipt_value(source,amount,assignment_id,bonus,domain=None):
         value={'source':source,'amount_sum':amount,'assignment_id':assignment_id}
         if bonus:value['bonus_sum']=bonus
+        if command.get('wallet_protocol')==2:value['bonus_domain']=domain or command.get('bonus_domain','shared')
         return value
     result: dict = {"action": action}
 
@@ -227,7 +253,7 @@ def apply_command(state: WalletState, command: dict, *, now: datetime,
                 raise WalletConflict('Invalid funding receipt')
             value=positive_int(funding.get('amount_sum'),'Funding')
             bonus=bonus_amount(funding.get('bonus_sum',0))
-            normalized=receipt_value(funding['source'],value,a['id'],bonus)
+            normalized=receipt_value(funding['source'],value,a['id'],bonus,funding.get('bonus_domain','shared'))
             if receipt in next_state.funding_receipts:
                 if next_state.funding_receipts[receipt]!=normalized:
                     raise WalletConflict('Funding receipt reused with different contents')
@@ -271,11 +297,15 @@ def apply_command(state: WalletState, command: dict, *, now: datetime,
                                 "timeout_minutes": policy.visit_timeout_minutes, "expires_at": None}
         else:
             next_state.visit["expires_at"] = None
+        loaded = next_state.wallet_sum if reserve_amount is None else reserve_amount
+        bonus = next_state.wallet_bonus_sum if reserve_bonus is None else reserve_bonus
+        if type(loaded) is not int or not 0 < loaded <= next_state.wallet_sum or type(bonus) is not int or not 0 <= bonus <= min(loaded,next_state.wallet_bonus_sum):
+            raise WalletConflict('Invalid eligible load')
         next_state.assignment = {"id": assignment_id, "visit_id": next_state.visit["id"],
-                                 "post_no": post, "status": "reserved", "balance_sum": next_state.wallet_sum,
-                                 **({"bonus_sum":next_state.wallet_bonus_sum} if next_state.wallet_bonus_sum else {})}
-        next_state.wallet_sum = 0
-        next_state.wallet_bonus_sum = 0
+                                 "post_no": post, "status": "reserved", "balance_sum": loaded,
+                                 **({"bonus_sum":bonus} if bonus else {})}
+        next_state.wallet_sum -= loaded
+        next_state.wallet_bonus_sum -= bonus
         result.update(next_state.assignment)
         result["pause_millis"]=next_state.visit["pause_millis"]
     elif action == "accept_load":

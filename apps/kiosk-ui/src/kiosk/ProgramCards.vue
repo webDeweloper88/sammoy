@@ -3,7 +3,7 @@ import {dryFogTones} from './dry-fog.js'
 import {computed} from 'vue'
 import {modePhoto} from './theme2-media.js'
 import WashIcon from './WashIcon.vue'
-const props=defineProps({heading:String,programs:Array,selected:String,active:Boolean,disabled:Boolean,t:Object,centerLabel:String,centerSub:String,centerDisabled:Boolean,centerIcon:String,pauseState:String,language:String})
+const props=defineProps({pauseEnabled:{type:Boolean,default:true},heading:String,programs:Array,selected:String,active:Boolean,disabled:Boolean,t:Object,centerLabel:String,centerSub:String,centerDisabled:Boolean,centerIcon:String,pauseState:String,language:String})
 const emit=defineEmits(['select','center'])
 const order=['aroma_1','aroma_2','aroma_3','aroma_4','aroma_5','water','foam','wax','chem','osmos','nano']
 const ordered=computed(()=>[...props.programs].sort((a,b)=>order.indexOf(a.id)-order.indexOf(b.id)))
@@ -19,6 +19,6 @@ const headingText=computed(()=>({uz:'YUVISH REJIMLARI',ru:'ПРОГРАММЫ М
    <span v-if="selected===p.id" class="program-card-state"><span v-if="active" class="mode-running-dot" aria-hidden="true"></span>{{active?t.running:t.trigger}}</span>
   </button>
  </div>
- <button v-if="selected" class="card-pause" :class="{'pause-free':pauseState==='free','pause-paid':pauseState==='paid','pause-stopped':pauseState==='stopped'}" :aria-label="centerLabel" :disabled="centerDisabled" @click="emit('center')"><WashIcon :name="centerIcon"/><span><strong>{{centerLabel}}</strong><small v-if="centerSub">{{centerSub}}</small></span></button>
+ <button v-if="selected&&pauseEnabled" class="card-pause" :class="{'pause-free':pauseState==='free','pause-paid':pauseState==='paid','pause-stopped':pauseState==='stopped'}" :aria-label="centerLabel" :disabled="centerDisabled" @click="emit('center')"><WashIcon :name="centerIcon"/><span><strong>{{centerLabel}}</strong><small v-if="centerSub">{{centerSub}}</small></span></button>
 </section>
 </template>

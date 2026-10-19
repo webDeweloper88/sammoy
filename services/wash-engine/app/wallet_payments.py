@@ -25,6 +25,16 @@ def bind_new_intent(runtime):
         return session,runtime.active_session_card_uid
 
 
+def payment_protocol(runtime,card,session_id,cfg):
+    if not ((card or {}).get('state') or {}).get('device_wallet'):return {}
+    with db() as conn:
+        row=conn.execute('SELECT metadata FROM wash_sessions WHERE id=%s',(session_id,)).fetchone()
+    meta=(row or {}).get('metadata') or {}
+    origin=meta.get('device_wallet_origin') or meta.get('wallet_assignment') or {}
+    kind=origin.get('device_type',getattr(runtime,'device_type',cfg.get('device_types',{}).get(str(cfg.get('local_post')),'wash')))
+    return {'wallet_protocol':2,'device_type':kind,'bonus_domain':origin.get('bonus_domain','shared' if cfg.get('bonus_mode','shared')=='shared' else kind)}
+
+
 def credit_confirmed(runtime,row):
     """Return destination; provider status must already be verified by main.py."""
     origin=row.get('wallet_origin_session_id')
@@ -45,7 +55,7 @@ def credit_confirmed(runtime,row):
         if uid:
             cfg=wallet_client.discover_configuration()
             wallet_client.execute('click-credit:'+str(row['id']),uid,{'action':'wallet_credit','post_no':cfg['local_post'],
-                 'amount_sum':amount,'bonus_sum':bonus,'receipt_id':key,'source':'click'})
+                 'amount_sum':amount,'bonus_sum':bonus,'receipt_id':key,'source':'click',**payment_protocol(runtime,card,origin,cfg)})
             with db() as conn:
                 conn.execute("INSERT INTO payments(wash_session_id,provider,status,amount_sum,idempotency_key,raw_payload,credited_at) VALUES(%s,'click','credited',%s,%s,%s,now()) ON CONFLICT(idempotency_key) DO NOTHING",
                              (origin,amount,key,Jsonb({'wallet_uid':uid,'destination':'wallet','intent_id':str(row['id']),'bonus_sum':bonus})))
@@ -140,7 +150,7 @@ def restore_recovery(recovery_id,uid,actor):
     operation=meta.get("wallet_operation_id") or (f"nv9-recovery:{meta['nv9_stream_id']}:{meta['first_pulse']}:{meta['rising_count']}"
         if meta.get("nv9_stream_id") else meta.get("wallet_recovery_id") or f"post:{cfg['local_post']}:recovery:{recovery_id}")
     wallet_client.execute(operation,uid,{'action':'wallet_credit','post_no':cfg['local_post'],
-        'amount_sum':int(row['amount_sum'])-int(row.get('bonus_sum') or 0),'bonus_sum':int(row.get('bonus_sum') or 0),'receipt_id':operation,'source':source})
+        'amount_sum':int(row['amount_sum'])-int(row.get('bonus_sum') or 0),'bonus_sum':int(row.get('bonus_sum') or 0),'receipt_id':operation,'source':source,**payment_protocol(None,wallet_client.inspect(uid),row['wash_session_id'],cfg)})
     with db() as conn:
         conn.execute("UPDATE recovery_credits SET status='claimed',claimed_at=now(),metadata=metadata||%s WHERE id=%s AND status='unclaimed'",(Jsonb({'wallet_operation_id':operation}),recovery_id));conn.commit()
     return {'ok':True,'uid':uid,'amount_sum':int(row['amount_sum'])}
