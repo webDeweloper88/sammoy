@@ -43,11 +43,15 @@ services:
     image: sammoy2-io-helper:latest
     container_name: sammoy2-io-helper
     restart: unless-stopped
+    cap_add:
+      - SYS_NICE
     logging: *service-logging
 
     environment:
       TZ: Asia/Tashkent
       IO_CONFIG: /config/io-map.yaml
+      IO_BILL_LEVEL_PROCESS: ${IO_BILL_LEVEL_PROCESS:-0}
+      IO_BILL_SAMPLER_NICE: ${IO_BILL_SAMPLER_NICE:-0}
 
     volumes:
       - ./config/io-map.yaml:/config/io-map.yaml:ro

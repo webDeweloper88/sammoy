@@ -11,6 +11,7 @@ from bill_filter import BillFilter, normalize as normalize_bill_filter, PRESETS
 from datetime import timedelta
 from bill_gpio import event_seconds, BillGPIOTrace, BillLevelTrace
 from bill_level_reader import LevelReader
+from bill_process_reader import ProcessLevelReader
 
 import gpiod
 import yaml
@@ -453,6 +454,7 @@ def bill_filter_write(value: dict):
     except ValueError as exc:raise HTTPException(422,str(exc)) from exc
     with bill_lock:
         reader=APP_STATE.get('bill_reader')
+        restart_reader=False
         with reader.state_lock if reader else nullcontext():
             old=APP_STATE.get('bill_filter');line=APP_STATE.get('bill_line')
             if old is None or line is None:raise HTTPException(503,'Bill input is not enabled')
@@ -467,10 +469,18 @@ def bill_filter_write(value: dict):
             APP_STATE['bill_filter']=BillFilter(config,active,now,fault=old.fault)
             reader=APP_STATE.get('bill_reader')
             if reader:
-                reader.active_low=config['active_low']
-                reader.previous=active
-                reader.last_at=now
-                reader.gap_limit_ms=min(config['min_pulse_ms'],config['min_gap_ms'] or config['min_pulse_ms'])
+                restart_reader=getattr(reader,'restart_for_settings',False)
+                if not restart_reader:
+                    reader.active_low=config['active_low']
+                    reader.previous=active
+                    reader.last_at=now
+                    reader.gap_limit_ms=min(config['min_pulse_ms'],config['min_gap_ms'] or config['min_pulse_ms'])
+        if restart_reader:
+            try:reader.reconfigure(config['active_low'],active,now,min(config['min_pulse_ms'],config['min_gap_ms'] or config['min_pulse_ms']))
+            except Exception:
+                APP_STATE['bill_filter'].fault='reader_failed'
+                APP_STATE['pulse_counter'].set_setting('bill_filter_fault','reader_failed')
+                raise HTTPException(503,'Не удалось перезапустить читатель купюр; приём заблокирован') from None
     return bill_snapshot()
 
 
@@ -494,8 +504,9 @@ def nv9_listener(cfg, counter, stop_event):
     line=chip.get_line(bill['gpio_line'])
     request=gpiod.line_request();request.consumer='sammoy-bill-filter'
     reader_mode=bill.get('reader','edges')
-    if reader_mode not in ('edges','level'):raise ValueError('Unknown bill GPIO reader')
-    request.request_type=gpiod.line_request.DIRECTION_INPUT if reader_mode=='level' else gpiod.line_request.EVENT_BOTH_EDGES
+    if reader_mode=='level' and os.getenv('IO_BILL_LEVEL_PROCESS')=='1':reader_mode='level-process'
+    if reader_mode not in ('edges','level','level-process'):raise ValueError('Unknown bill GPIO reader')
+    request.request_type=gpiod.line_request.DIRECTION_INPUT if reader_mode in ('level','level-process') else gpiod.line_request.EVENT_BOTH_EDGES
     if bill.get('gpio_bias')=='pull-up':request.flags=gpiod.line_request.FLAG_BIAS_PULL_UP
     line.request(request)
     config=normalize_bill_filter(counter.get_setting('bill_filter',{'active_low':bill.get('active_low',True)}))
@@ -505,14 +516,15 @@ def nv9_listener(cfg, counter, stop_event):
         APP_STATE['bill_trace']=BillGPIOTrace()
         APP_STATE['bill_filter']=BillFilter(config,active,time.monotonic(),counter.get_setting('bill_filter_fault'))
     reader=None
-    if reader_mode=='level':
+    if reader_mode in ('level','level-process'):
         positive_gap=config['min_gap_ms'] or config['min_pulse_ms']
-        reader=LevelReader(line,config['active_low'],active,time.monotonic(),min(config['min_pulse_ms'],positive_gap))
+        reader_class=ProcessLevelReader if reader_mode=='level-process' else LevelReader
+        reader=reader_class(line,config['active_low'],active,time.monotonic(),min(config['min_pulse_ms'],positive_gap))
         APP_STATE['bill_trace'].timestamp_source='sampled_monotonic'
     APP_STATE['bill_reader']=reader
-    if reader:reader.start()
-    print('Bill GPIO filter ready: watching complete pulses; reader='+reader_mode,flush=True)
     try:
+        if reader:reader.start()
+        print('Bill GPIO filter ready: watching complete pulses; reader='+reader_mode,flush=True)
         while not stop_event.is_set():
             if reader:
                 reader.available.wait(.02)

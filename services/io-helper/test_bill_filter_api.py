@@ -10,6 +10,27 @@ from bill_filter import BillFilter,PRESETS
 from pulse_journal import PulseJournal
 
 class BillFilterApiTests(unittest.TestCase):
+    def test_process_reader_settings_restart_without_changing_counter(self):
+        from bill_process_reader import ProcessLevelReader
+        reader=ProcessLevelReader(self.line,True,False,0,5)
+        reader.reconfigure=Mock();main.APP_STATE['bill_reader']=reader
+        self.journal.increment();identity=self.journal.stream_id
+        main.bill_filter_write({'min_pulse_ms':25,'min_gap_ms':25})
+        self.assertEqual(reader.reconfigure.call_count,1)
+        self.assertEqual(reader.reconfigure.call_args.args[0:2],(True,False))
+        self.assertEqual(reader.reconfigure.call_args.args[3],25)
+        self.assertEqual(self.journal.value(),1);self.assertEqual(self.journal.stream_id,identity)
+
+    def test_process_reader_restart_failure_blocks_credit_and_preserves_counter(self):
+        from bill_process_reader import ProcessLevelReader
+        reader=ProcessLevelReader(self.line,True,False,0,5)
+        reader.reconfigure=Mock(side_effect=RuntimeError('failed'))
+        main.APP_STATE['bill_reader']=reader
+        self.journal.increment()
+        with self.assertRaises(HTTPException) as error:main.bill_filter_write({'min_pulse_ms':25})
+        self.assertEqual(error.exception.status_code,503)
+        self.assertEqual(main.APP_STATE['bill_filter'].fault,'reader_failed')
+        self.assertEqual(self.journal.value(),1)
     def setUp(self):
         self.old=dict(main.APP_STATE);self.tmp=tempfile.TemporaryDirectory()
         self.journal=PulseJournal(str(Path(self.tmp.name)/'counter.sqlite3'))
