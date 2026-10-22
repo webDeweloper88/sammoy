@@ -34,7 +34,7 @@ class RfidTests(unittest.TestCase):
         from unittest.mock import MagicMock
         broken = MagicMock()
         broken.firmware_version = (50, 1, 6, 7)
-        broken.read_passive_target.side_effect = OSError("disconnected")
+        broken.read_target_info.side_effect = OSError("disconnected")
         healthy = MagicMock()
         healthy.firmware_version = (50, 1, 6, 7)
 
@@ -42,9 +42,9 @@ class RfidTests(unittest.TestCase):
             self.assertTrue(reader.snapshot()["online"])
             self.assertIsNone(reader.snapshot()["last_error"])
             stop.set()
-            return b"\x02\xAC"
+            return {"uid": b"\x02\xAC", "sak": 8, "atqa": "0400"}
 
-        healthy.read_passive_target.side_effect = detect
+        healthy.read_target_info.side_effect = detect
         with patch("rfid.LinuxI2cPn532", side_effect=[broken, healthy]):
             reader.run(stop)
         broken.close.assert_called_once()
@@ -59,6 +59,26 @@ class RfidTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "not detected"):
                 LinuxI2cPn532(7)
             bus.return_value.close.assert_called_once()
+
+class TargetMetadataTests(unittest.TestCase):
+    def test_same_response_metadata_and_uid(self):
+        from unittest.mock import Mock
+        reader = object.__new__(LinuxI2cPn532)
+        reader.listen_for_passive_target = Mock(return_value=True)
+        reader.process_response = Mock(return_value=bytes([1, 1, 4, 0, 32, 4, 1, 2, 3, 4]))
+        target = reader.read_target_info()
+        self.assertEqual(target, {'uid': b'\x01\x02\x03\x04', 'sak': 32, 'atqa': '0400'})
+        events = RfidReader({'enabled': True})
+        events.observe(**target)
+        self.assertEqual(events.events_since()['events'][0]['sak'], 32)
+
+    def test_truncated_response_is_not_a_card(self):
+        from unittest.mock import Mock
+        reader = object.__new__(LinuxI2cPn532)
+        reader.listen_for_passive_target = Mock(return_value=True)
+        reader.process_response = Mock(return_value=bytes([1, 1, 4, 0, 8, 7, 1]))
+        with self.assertRaises(RuntimeError):
+            reader.read_target_info()
 
 
 if __name__ == "__main__":

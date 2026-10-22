@@ -51,7 +51,7 @@ class WalletSnapshotTests(unittest.TestCase):
         runtime._apply_output_sync = Mock(side_effect=RuntimeError('No OFF acknowledgement'))
         with patch('app.wallet_post.pending_job', return_value=None):
             with runtime.lock:
-                runtime._apply_rfid_card_locked('507EF458', {})
+                runtime._apply_rfid_card_locked('507EF458', {'sak': 8, 'atqa': '0400'})
         self.assertIsNone(runtime._wallet_pending_snapshot)
         self.assertEqual(runtime.snapshot()['state']['creditSum'], 33000)
         self.assertEqual(runtime.state['lastRfidStatus'], 'wallet_error')

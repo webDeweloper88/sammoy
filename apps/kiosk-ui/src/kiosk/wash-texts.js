@@ -31,6 +31,7 @@ const rows = {
  currentProgram:['Joriy rejim','Ағымдағы режим','Учурдагы режим','Текущая программа'],
 
  cardLoaded:['Kartadan balans yuklandi','Картадан баланс жүктелді','Картадан баланс жүктөлдү','Баланс загружен с карты'],
+ nfcUnsupported:['Bu NFC turi qo‘llab-quvvatlanmaydi. Moyka kartasidan foydalaning','Бұл NFC түрі қолдау таппайды. Жуу картасын пайдаланыңыз','Бул NFC түрү колдоого алынбайт. Жуу картасын колдонуңуз','Этот тип NFC не поддерживается. Используйте карту мойки'],
  cardInUse:['Karta boshqa postga bog‘langan. Avval u yerdagi seansni yakunlang','Карта басқа постқа байланған. Алдымен сол сеансты аяқтаңыз','Карта башка постко байланган. Адегенде ал сеансты аяктаңыз','Карта занята на другом посту. Сначала завершите там сеанс'],
  cashHeld:['Naqd pul saqlandi. Operatorga murojaat qiling','Қолма-қол ақша сақталды. Операторға хабарласыңыз','Нак акча сакталды. Операторго кайрылыңыз','Наличные сохранены для восстановления. Обратитесь к оператору'],
  vipPauseCharging:['VIP limiti kamaymoqda','VIP лимиті азаюда','VIP лимити азаюуда','Расходуется VIP-лимит'],

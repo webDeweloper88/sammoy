@@ -1526,6 +1526,16 @@ class WashRuntime:
 
     @card_operation()
     def _apply_rfid_card_locked(self, uid: str, event: dict[str, Any]) -> None:
+        # Reject before wallet freeze, lookups, sessions or financial mutations.
+        # ISO-DEP is a device class, not a guaranteed phone detector.
+        sak = event.get("sak")
+        atqa = event.get("atqa")
+        if (type(sak) is not int or not 0 <= sak <= 255
+                or not isinstance(atqa, str) or len(atqa) != 4
+                or any(c not in "0123456789abcdefABCDEF" for c in atqa)
+                or sak & 0x20):
+            self.state["lastRfidStatus"] = "nfc_unsupported"
+            return
         if self.shared_wallet_enabled:
             from .wallet_post import handle_card, pending_job, freeze
             try:

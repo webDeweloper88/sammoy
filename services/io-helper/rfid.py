@@ -50,7 +50,7 @@ class RfidReader:
                 "rfid": dict(self.state),
             }
 
-    def observe(self, uid):
+    def observe(self, uid, sak=None, atqa=None):
         now = time.monotonic()
         seen_at = datetime.now(timezone.utc).isoformat()
         with self.lock:
@@ -61,11 +61,12 @@ class RfidReader:
                     self.events.append({
                         "seq": self.seq, "time": seen_at,
                         "uid": normalized, "kind": "card_seen",
+                        "sak": sak, "atqa": atqa,
                     })
                 self.held_uid = normalized
                 self.last_seen = now
                 self.state.update(
-                    latest={"uid": normalized, "seen_at": seen_at},
+                    latest={"uid": normalized, "seen_at": seen_at, "sak": sak, "atqa": atqa},
                     present=True, last_seen_at=seen_at, last_error=None,
                 )
             elif self.last_seen is not None and now - self.last_seen >= self.release_timeout:
@@ -87,7 +88,8 @@ class RfidReader:
                     )
                 print(f"PN532 ONLINE: /dev/i2c-{self.bus}, address 0x{self.address:02X}, firmware {firmware}", flush=True)
                 while not stop_event.is_set():
-                    self.observe(reader.read_passive_target(timeout=self.poll_timeout))
+                    target = reader.read_target_info(timeout=self.poll_timeout)
+                    self.observe(**target) if target else self.observe(None)
             except Exception as exc:
                 error = f"PN532 reader failed: {exc}"
                 with self.lock:

@@ -86,7 +86,7 @@ onUnmounted(()=>{stopped=true;clearTimeout(timer);clearTimeout(successTimer)})
    <template v-else-if="method==='cash'||method==='card'">
     <WashIcon class="payment-large-icon" :name="method"/>
     <h3>{{ t[method] }}</h3><p>{{ method==='cash'?(state?.billInputReady===false?t.cashUnavailable:t.cashHint):(state?.creditSum>0?t.cardSave:t.cardHint) }}</p>
-    <p v-if="method==='card' && cardResult" role="status">{{ cardResult==='wallet_error'?walletErrorText(state,t):cardResult==='bonus_not_available_for_device'?t.bonusNotForDevice:cardResult==='card_in_use'?t.cardInUse:cardResult==='vip_granted'?t.vipGranted:cardResult==='customer_balance_used'?t.cardLoaded:cardResult==='customer_balance_saved'?t.cardSaved:['vip_remaining_burned','vip_session_closed'].includes(cardResult)?t.cardClosed:t.cardRejected }}</p>
+    <p v-if="method==='card' && cardResult" role="status">{{ cardResult==='nfc_unsupported'?t.nfcUnsupported:cardResult==='wallet_error'?walletErrorText(state,t):cardResult==='bonus_not_available_for_device'?t.bonusNotForDevice:cardResult==='card_in_use'?t.cardInUse:cardResult==='vip_granted'?t.vipGranted:cardResult==='customer_balance_used'?t.cardLoaded:cardResult==='customer_balance_saved'?t.cardSaved:['vip_remaining_burned','vip_session_closed'].includes(cardResult)?t.cardClosed:t.cardRejected }}</p>
     <button v-if="preview" class="sheet-action" @click="emit('preview-credit',5000);emit('close')">Тест: +5 000 so‘m</button>
     <p v-if="!ready" class="payment-error">{{ t.hardware }}</p>
    </template>

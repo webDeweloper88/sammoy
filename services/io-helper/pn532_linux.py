@@ -18,6 +18,21 @@ class LinuxI2cPn532(PN532):
             self._bus.close()
             raise
 
+    def read_target_info(self, timeout: float = 1):
+        """Keep ISO14443A activation metadata from the same response as UID."""
+        if not self.listen_for_passive_target(timeout=timeout):
+            return None
+        response = self.process_response(0x4A, response_length=64, timeout=timeout)
+        if response is None:
+            return None
+        if len(response) < 6 or response[0] != 1:
+            raise RuntimeError("Invalid PN532 target response")
+        length = response[5]
+        if length not in (4, 7, 10) or len(response) < 6 + length:
+            raise RuntimeError("Invalid PN532 UID length")
+        return {"uid": bytes(response[6:6 + length]),
+                "sak": int(response[4]), "atqa": bytes(response[2:4]).hex().upper()}
+
     def close(self) -> None:
         self._bus.close()
 

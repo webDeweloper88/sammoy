@@ -54,6 +54,7 @@ const statusText=computed(()=>{
  if(s?.walletCashHeld>0)return t.value.cashHeld+' · '+Number(s.walletCashHeld).toLocaleString('ru-RU')+' so‘m'
  if(s?.lastRfidProcessedAt&&now.value-Date.parse(s.lastRfidProcessedAt)>=0&&now.value-Date.parse(s.lastRfidProcessedAt)<8000){
   const result=s.lastRfidResult
+  if(result==='nfc_unsupported')return t.value.nfcUnsupported
   if(result==='wallet_error')return walletErrorText(s,t.value)
   if(result==='bonus_not_available_for_device')return t.value.bonusNotForDevice
   if(result==='card_in_use')return t.value.cardInUse
