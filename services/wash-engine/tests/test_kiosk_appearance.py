@@ -14,7 +14,7 @@ class KioskAppearanceTests(unittest.TestCase):
    c=normalize_kiosk_settings({"theme":{"design":design,"appearance":{"mode":"manual","manualTheme":"light"}}})
    self.assertEqual(normalize_kiosk_settings(c)["theme"]["design"],design)
    self.assertEqual(c["theme"]["appearance"]["manualTheme"],"light")
-  self.assertEqual(normalize_kiosk_settings({"theme":{"design":"invalid"}})["theme"]["design"],"wheel")
+  self.assertEqual(normalize_kiosk_settings({"theme":{"design":"invalid"}})["theme"]["design"],"cards")
  def test_invalid_appearance_falls_back_safely(self):
   c=normalize_kiosk_settings({'theme':{'appearance':{'mode':{},'manualTheme':[],'lightStart':'25:99','lightEnd':None,'timezone':'Europe/London'}}})
   self.assertEqual(c['theme']['appearance']['mode'],'auto')

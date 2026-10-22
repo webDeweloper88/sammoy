@@ -1,0 +1,23 @@
+{
+  "format": 1,
+  "board": "Radxa Cubie A7A",
+  "source_post": 2,
+  "disk_bytes": 63864569856,
+  "sector_bytes": 512,
+  "partition_table": "gpt",
+  "partitions": [
+    {
+      "offset_bytes": 16777216,
+      "size_bytes": 16777216
+    },
+    {
+      "offset_bytes": 33554432,
+      "size_bytes": 314572800
+    },
+    {
+      "offset_bytes": 348127232,
+      "size_bytes": 63516425728
+    }
+  ],
+  "image_state": "raw_source_must_be_cleaned_offline"
+}

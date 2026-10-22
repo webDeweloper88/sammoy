@@ -1,12 +1,16 @@
 import os
 import threading
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from output_test import OutputTest
 from controller_lease import ControllerLease
 from pulse_journal import PulseJournal
 from input_filter import InputFilter
+from bill_filter import BillFilter, normalize as normalize_bill_filter, PRESETS
 from datetime import timedelta
+from bill_gpio import event_seconds, BillGPIOTrace, BillLevelTrace
+from bill_level_reader import LevelReader
 
 import gpiod
 import yaml
@@ -22,6 +26,7 @@ CONFIG_FILE = os.getenv("IO_CONFIG", "/config/io-map.yaml")
 app = FastAPI(title="SAMMOY 2.0 io-helper")
 
 state_lock = threading.Lock()
+bill_lock = threading.RLock()
 output_test = OutputTest()
 started_monotonic = time.monotonic()
 
@@ -242,6 +247,7 @@ def health():
 @app.get("/io")
 def get_io():
     safety=APP_STATE["lease"].snapshot()
+    bill=bill_snapshot()
     with state_lock:
         return {
             "device_type": APP_STATE["controller"].cfg.get("device_type", "wash"),
@@ -249,6 +255,7 @@ def get_io():
             "raw_inputs": list(io_state["raw_inputs"]),
             "outputs": dict(io_state["outputs"]),
             "raw_outputs": list(io_state["raw_outputs"]),
+            "bill_filter": bill,
             "nv9_pulses": io_state["nv9_pulses"],
             "nv9_enabled": APP_STATE.get("nv9_enabled", True),
             "nv9_stream_id": APP_STATE["pulse_counter"].stream_id,
@@ -380,63 +387,184 @@ def test_output(name: str):
         raise HTTPException(503, "Output test or OFF readback failed") from exc
 
 
+def bill_events_pending(line):
+    reader=APP_STATE.get('bill_reader')
+    return reader.pending() if reader is not None else line.event_wait(timedelta(seconds=0))
+
+
+def bill_snapshot():
+    with bill_lock:
+        f=APP_STATE.get('bill_filter')
+        return {'enabled':APP_STATE.get('nv9_enabled',False),
+                'published_pulses':APP_STATE['pulse_counter'].value(),
+                'presets':PRESETS, **(f.snapshot() if f else {'ready':False,'fault':None}),
+                'diagnostics':{**(APP_STATE['bill_trace'].summary() if APP_STATE.get('bill_trace') else {}),
+                    **(APP_STATE['bill_reader'].snapshot() if APP_STATE.get('bill_reader') else {'reader':'edges'})}}
+
+
+@app.get('/bill/filter')
+def bill_filter_read():
+    return bill_snapshot()
+
+
+@app.get('/bill/trace')
+def bill_trace_read():
+    with bill_lock:
+        trace=APP_STATE.get('bill_trace')
+        result=trace.snapshot() if trace else {'events':[]}
+        levels=APP_STATE.get('bill_levels')
+        if levels:result['levels']=levels.snapshot()
+        return result
+
+
+def observe_bill_levels(line, active_low, trace):
+    # Read through the existing line request; no second GPIO consumer or output.
+    try:
+        while time.monotonic()<trace.ends_at:
+            if APP_STATE.get('bill_line') is not line:break
+            active=(line.get_value()==0) if active_low else (line.get_value()!=0)
+            trace.observe(active,time.monotonic())
+            time.sleep(.005)
+    except Exception as exc:
+        with trace.lock:trace.error=type(exc).__name__
+    finally:
+        with trace.lock:trace.finished=True
+
+
+@app.post('/bill/trace/start')
+def bill_level_trace_start(value:dict):
+    seconds=value.get('seconds',180)
+    if set(value)-{'seconds'} or type(seconds) is not int or not 10<=seconds<=300:
+        raise HTTPException(422,'Observation must last 10 to 300 seconds')
+    with bill_lock:
+        line=APP_STATE.get('bill_line');f=APP_STATE.get('bill_filter')
+        previous=APP_STATE.get('bill_levels')
+        if line is None or f is None:raise HTTPException(503,'Bill input not enabled')
+        if previous and not previous.finished:raise HTTPException(409,'Level observation already running')
+        if f.active or not f.ready or f.fault:raise HTTPException(409,'Wait for an idle healthy input')
+        trace=BillLevelTrace(seconds,time.monotonic());APP_STATE['bill_levels']=trace
+        threading.Thread(target=observe_bill_levels,args=(line,f.settings['active_low'],trace),daemon=True,name='bill-level-diagnostics').start()
+        return {'ok':True,'seconds':seconds,'sample_interval_ms':5,'credits_from_level_observer':False}
+
+
+@app.post('/bill/filter')
+def bill_filter_write(value: dict):
+    try:config=normalize_bill_filter(value)
+    except ValueError as exc:raise HTTPException(422,str(exc)) from exc
+    with bill_lock:
+        reader=APP_STATE.get('bill_reader')
+        with reader.state_lock if reader else nullcontext():
+            old=APP_STATE.get('bill_filter');line=APP_STATE.get('bill_line')
+            if old is None or line is None:raise HTTPException(503,'Bill input is not enabled')
+            now=time.monotonic()
+            repolarize=(config['active_low']!=old.settings['active_low'] and old.active
+                        and old.since is not None and now-old.since>=config['startup_idle_ms']/1000)
+            if not (old.can_reset(now) or repolarize) or bill_events_pending(line):
+                raise HTTPException(409,'Wait for a stable inactive bill input')
+            active=(line.get_value()==0) if config['active_low'] else (line.get_value()!=0)
+            if active:raise HTTPException(409,'New polarity would make the input active')
+            APP_STATE['pulse_counter'].set_setting('bill_filter',config)
+            APP_STATE['bill_filter']=BillFilter(config,active,now,fault=old.fault)
+            reader=APP_STATE.get('bill_reader')
+            if reader:
+                reader.active_low=config['active_low']
+                reader.previous=active
+                reader.last_at=now
+                reader.gap_limit_ms=min(config['min_pulse_ms'],config['min_gap_ms'] or config['min_pulse_ms'])
+    return bill_snapshot()
+
+
+@app.post('/bill/filter/reset')
+def bill_filter_reset():
+    with bill_lock:
+        f=APP_STATE.get('bill_filter');line=APP_STATE.get('bill_line')
+        if f is None or line is None:raise HTTPException(503,'Bill input is not enabled')
+        active=(line.get_value()==0) if f.settings['active_low'] else (line.get_value()!=0)
+        now=time.monotonic()
+        if active or not f.can_reset(now) or bill_events_pending(line):raise HTTPException(409,'Input must be stably inactive before reset')
+        APP_STATE['pulse_counter'].set_setting('bill_filter_fault',None)
+        f.reset_fault(now)
+    return bill_snapshot()
+
+
 def nv9_listener(cfg, counter, stop_event):
-    bill = cfg["bill_acceptor"]
-    if bill.get("enabled", True) is False:
-        return
-
-    chip_path = bill["gpio_chip"]
-    line_number = bill["gpio_line"]
-
-    chip = gpiod.chip(
-        chip_path,
-        gpiod.chip.OPEN_BY_PATH,
-    )
-
-    line = chip.get_line(line_number)
-
-    request = gpiod.line_request()
-    request.consumer = "sammoy-nv9"
-
-    if bill.get("active_low", True):
-        request.request_type = (
-            gpiod.line_request.EVENT_FALLING_EDGE
-        )
-    else:
-        request.request_type = (
-            gpiod.line_request.EVENT_RISING_EDGE
-        )
-
-    if bill.get("gpio_bias") == "pull-up":
-        request.flags = (
-            gpiod.line_request.FLAG_BIAS_PULL_UP
-        )
-
+    bill=cfg['bill_acceptor']
+    if bill.get('enabled',True) is False:return
+    chip=gpiod.chip(bill['gpio_chip'],gpiod.chip.OPEN_BY_PATH)
+    line=chip.get_line(bill['gpio_line'])
+    request=gpiod.line_request();request.consumer='sammoy-bill-filter'
+    reader_mode=bill.get('reader','edges')
+    if reader_mode not in ('edges','level'):raise ValueError('Unknown bill GPIO reader')
+    request.request_type=gpiod.line_request.DIRECTION_INPUT if reader_mode=='level' else gpiod.line_request.EVENT_BOTH_EDGES
+    if bill.get('gpio_bias')=='pull-up':request.flags=gpiod.line_request.FLAG_BIAS_PULL_UP
     line.request(request)
-
-    print(
-        f"NV9: watching {chip_path} line {line_number}",
-        flush=True,
-    )
-
+    config=normalize_bill_filter(counter.get_setting('bill_filter',{'active_low':bill.get('active_low',True)}))
+    active=(line.get_value()==0) if config['active_low'] else (line.get_value()!=0)
+    with bill_lock:
+        APP_STATE['bill_line']=line
+        APP_STATE['bill_trace']=BillGPIOTrace()
+        APP_STATE['bill_filter']=BillFilter(config,active,time.monotonic(),counter.get_setting('bill_filter_fault'))
+    reader=None
+    if reader_mode=='level':
+        positive_gap=config['min_gap_ms'] or config['min_pulse_ms']
+        reader=LevelReader(line,config['active_low'],active,time.monotonic(),min(config['min_pulse_ms'],positive_gap))
+        APP_STATE['bill_trace'].timestamp_source='sampled_monotonic'
+    APP_STATE['bill_reader']=reader
+    if reader:reader.start()
+    print('Bill GPIO filter ready: watching complete pulses; reader='+reader_mode,flush=True)
     try:
         while not stop_event.is_set():
-            if line.event_wait(timedelta(seconds=1)):
-                line.event_read()
-
-                count = counter.increment()
-
-                with state_lock:
-                    io_state["nv9_pulses"] = count
-
-                print(
-                    f"NV9 PULSE: total={count}",
-                    flush=True,
-                )
-
+            if reader:
+                reader.available.wait(.02)
+            else:
+                has_event=line.event_wait(timedelta(milliseconds=20))
+            with bill_lock:
+                event=reader.read() if reader else (line.event_read() if has_event else None)
+                f=APP_STATE['bill_filter'];old_fault=f.fault
+                if reader and reader.error:f.fault=f.fault or reader.error
+                if event is not None:
+                    read_at=time.monotonic()
+                    try:
+                        now=event.at if reader else event_seconds(event)
+                        if now > read_at+.01:raise ValueError('GPIO clock is not monotonic')
+                    except (ValueError,AttributeError,TypeError,OverflowError):
+                        f.fault=f.fault or 'timestamp_invalid'
+                        if f.fault!=old_fault:
+                            counter.set_setting('bill_filter_fault',f.fault)
+                        continue  # No processing-clock fallback for financial events.
+                    active=event.active if reader else ((event.event_type==gpiod.line_event.FALLING_EDGE) if f.settings['active_low'] else (event.event_type==gpiod.line_event.RISING_EDGE))
+                    repeated=(active==f.active)
+                    if reader and event.uncertain and f.active:
+                        f.uncertain_pulse=True;f.uncertain_reason='sampling_gap'
+                    accepted=f.edge(active,now) if not reader or event.changed else False
+                    if reader and event.uncertain and active:
+                        f.uncertain_pulse=True;f.uncertain_reason='sampling_gap'
+                    if reader and not event.changed:f.poll(now)
+                    trace_row=APP_STATE['bill_trace'].record(kernel_at=now,read_at=read_at,
+                        active=active,accepted=accepted,fault=f.fault,repeated=repeated)
+                    try:
+                        trace_row['sampled_active']=(line.get_value()==0) if f.settings['active_low'] else (line.get_value()!=0)
+                        trace_row['sampled_seconds']=round(time.monotonic(),6)
+                    except Exception:
+                        trace_row['sampled_active']=None
+                else:
+                    if not bill_events_pending(line):f.poll(time.monotonic())
+                    accepted=False
+                if f.fault!=old_fault:
+                    counter.set_setting('bill_filter_fault',f.fault)
+                    print('BILL FILTER FAULT: '+str(f.fault),flush=True)
+                if accepted:
+                    commit_start=time.monotonic()
+                    count=counter.increment()
+                    APP_STATE['bill_trace'].committed(trace_row,time.monotonic()-commit_start)
+                    with state_lock:io_state['nv9_pulses']=count
+                    print(f'BILL PULSE ACCEPTED: total={count}',flush=True)
     finally:
-        line.release()
-        chip.reset()
+        if reader:reader.close()
+        with bill_lock:
+            APP_STATE['bill_line']=None
+            APP_STATE['bill_reader']=None
+        line.release();chip.reset()
 
 
 def modbus_loop(

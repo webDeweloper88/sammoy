@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=LABRIX Kiosk
+Comment=Minimal touchscreen session
+Exec=/opt/sammoy/sammoy2/deploy/minimal-kiosk/session.sh
+Type=Application
+DesktopNames=LABRIX

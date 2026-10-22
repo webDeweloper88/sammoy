@@ -35,7 +35,7 @@ try{
   else throw Error('Unexpected API '+path)
   await route.fulfill({contentType:'application/json',body:JSON.stringify(data)})
  })
- await page.goto(origin+'/wash')
+ await page.route('**/api/commissioning/state',r=>r.fulfill({json:{complete:true}}));await page.goto(origin+'/wash')
  await page.getByText('25 000',{exact:true}).waitFor()
  await page.getByRole('button',{name:'SUV',exact:true}).waitFor()
  assert.equal(await page.locator('.wheel-segment').count(),6)
@@ -93,6 +93,11 @@ try{
  await page.getByText('Yuvish davom etmoqda').waitFor()
  await page.locator('.wash-topup').tap()
  await page.screenshot({path:'../../docs/ui-payment-methods-1080x1920.png'})
+ s={...s,billInputReady:false,billInputFault:'stuck_active'}
+ await page.waitForFunction(()=>document.querySelector('.payment-method-cash')?.disabled)
+ assert.equal(await page.getByRole('button',{name:'Moyka kartasi',exact:true}).isDisabled(),false)
+ s={...s,billInputReady:true,billInputFault:null}
+ await page.waitForFunction(()=>!document.querySelector('.payment-method-cash')?.disabled)
  await page.getByRole('button',{name:'Naqd pul',exact:true}).tap()
  await page.getByText(/Kupyurani qabul/).waitFor()
  const beforeCash=posts.length

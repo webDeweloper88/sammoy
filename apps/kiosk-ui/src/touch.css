@@ -1,5 +1,9 @@
 /* Touch sizes and keyboard layout for the 27-inch 1920 × 1080 panel. */
 button, input, label { touch-action: manipulation; }
+.management-ui { touch-action:manipulation; }
+.management-ui .shell { user-select:none; }
+.management-ui input,.management-ui textarea { user-select:text; }
+.management-ui .system-dialog,.management-ui .confirm-dialog { touch-action:pan-y; overscroll-behavior-y:contain; }
 button { min-height: 56px; }
 .language button { min-width: 64px; min-height: 52px; }
 input:not([type=checkbox]) { min-height: 60px; font-size: 22px; }

@@ -54,3 +54,53 @@ class NetworkTests(unittest.TestCase):
                 value=m.validate(dict(interface='eth0',mode='static',address=address,prefix=prefix,gateway=gateway,dns=['9.9.9.9']))
                 self.assertEqual(value['address'],address);self.assertEqual(value['prefix'],prefix)
                 self.assertEqual(value['dns'],['9.9.9.9'])
+
+class TemporaryInternetTests(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+        self.directory=tempfile.TemporaryDirectory();self.addCleanup(self.directory.cleanup)
+        for name in ('TEMP','STATE'):
+            handle=patch.object(m,name,Path(self.directory.name)/name);handle.start();self.addCleanup(handle.stop)
+    def network(self):
+        n=m.Network.__new__(m.Network);n.nm=Mock();n.pending=Mock(return_value=None);n.status=Mock(return_value={'ok':True});return n
+    def test_temporary_profile_priority_without_autoconnect(self):
+        c=m.connection_settings(m.validate(dict(interface='wlan0',temporary=True,ssid='Phone',password='test-pass')))
+        self.assertFalse(c['connection']['autoconnect'])
+        self.assertEqual(c['connection']['id'],'LABRIX temporary setup internet')
+        for version in ('ipv4','ipv6'):
+            self.assertEqual(c[version]['route-metric'],5);self.assertLess(c[version]['dns-priority'],0)
+        with self.assertRaises(ValueError):m.validate(dict(interface='eth0',temporary=True))
+    def test_connect_uses_memory_wifi_checkpoint_and_excludes_secrets_from_state(self):
+        n=self.network();n.props=Mock(side_effect=[{}, {'ActiveConnection':'/old-active'}, {'Connection':'/old-connection'}]);n.nm.GetDeviceByIpIface.return_value='/wifi';n.nm.CheckpointCreate.return_value='/checkpoint';n.nm.AddAndActivateConnection2.return_value=('/connection','/active',{})
+        n.temporary_connect({'ssid':'Phone','password':'test-pass','interface':'eth0'})
+        n.nm.GetDeviceByIpIface.assert_called_once_with('wlan0')
+        self.assertEqual(list(n.nm.CheckpointCreate.call_args.args[0]),['/wifi'])
+        self.assertEqual(n.nm.AddAndActivateConnection2.call_args.args[3]['persist'],'memory')
+        data=m.json.loads(m.STATE.read_text());self.assertEqual(data['previous_connection'],'/old-connection');self.assertNotIn('test-pass',m.STATE.read_text())
+    def test_confirm_never_persists_or_reads_secrets(self):
+        n=self.network();pending=dict(id='test',expires_at=time.time()+80,device='/wifi',active='/active',connection='/connection',checkpoint='/checkpoint',temporary=True,previous_connection='/old',ssid='Phone')
+        n.check_pending=Mock(return_value=pending);n.props=Mock(return_value={'State':100,'ActiveConnection':'/active'});n.interface=Mock();n.status.return_value={'ok':True,'temporary_subnet_conflict':False,'interfaces':[{'interface':'wlan0','address':'192.168.43.2','gateway':'192.168.43.1'}]}
+        n.confirm({'id':'test'})
+        n.interface.return_value.GetSecrets.assert_not_called();n.interface.return_value.Update2.assert_not_called()
+        self.assertLess(abs(m.read_temporary()['expires_at']-time.time()-7200),2)
+        self.assertEqual(m.TEMP.stat().st_mode&0o777,0o600)
+    def test_overlapping_subnets_are_rolled_back(self):
+        self.assertTrue(m.overlapping_networks([{'interface':'eth0','connected':True,'address':'192.168.42.2','prefix':23},{'interface':'wlan0','connected':True,'address':'192.168.43.3','prefix':24}]))
+        n=self.network();n.check_pending=Mock(return_value=dict(id='test',expires_at=time.time()+80,device='/wifi',active='/active',connection='/connection',temporary=True));n.props=Mock(return_value={'State':100,'ActiveConnection':'/active'});n.interface=Mock();n.status.return_value={'temporary_subnet_conflict':True};n.rollback=Mock()
+        with self.assertRaises(m.NetworkError):n.confirm({'id':'test'})
+        n.rollback.assert_called_once_with({'id':'test'});self.assertFalse(m.TEMP.exists())
+    def test_disconnect_deletes_only_temp_and_restores_previous_wifi(self):
+        n=self.network();n.props=Mock(return_value={'ActiveConnection':'/active'});n.interface=Mock();n.interface.return_value.GetSettings.return_value={'connection':{'id':'LABRIX temporary setup internet'}}
+        m.save_temporary(dict(active='/active',device='/wifi',connection='/connection',previous_connection='/old',expires_at=time.time()+100))
+        n.temporary_disconnect({})
+        n.nm.DeactivateConnection.assert_called_once_with('/active');n.interface.return_value.Delete.assert_called_once();n.nm.ActivateConnection.assert_called_once_with('/old','/wifi',m.dbus.ObjectPath('/'));self.assertFalse(m.TEMP.exists())
+    def test_finish_delays_cleanup_for_browser_response(self):
+        n=self.network();m.save_temporary(dict(expires_at=time.time()+7200,ssid='Phone'))
+        result=n.temporary_finish({});self.assertTrue(result['scheduled']);self.assertLess(abs(result['disconnect_at']-time.time()-30),2)
+        n.nm.DeactivateConnection.assert_not_called()
+    def test_failed_restore_does_not_leave_stale_temp_state(self):
+        n=self.network();n.props=Mock(return_value={'ActiveConnection':'/active'});n.interface=Mock();n.interface.return_value.GetSettings.return_value={'connection':{'id':'LABRIX temporary setup internet'}};n.nm.ActivateConnection.side_effect=m.dbus.DBusException('unavailable')
+        m.save_temporary(dict(active='/active',device='/wifi',connection='/connection',previous_connection='/old'))
+        self.assertIn('warning',n.temporary_disconnect({}));self.assertFalse(m.TEMP.exists())

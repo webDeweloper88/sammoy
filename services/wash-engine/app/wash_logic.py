@@ -99,6 +99,8 @@ def normalize_parameters(value: dict[str, Any] | None, device_type: str = "wash"
         # Trigger wiring is diagnostic only for this type; an old wash setting
         # must never make a fragrance require IN3.
         params['requireTotalStopTrigger'] = False
+        from .dry_fog_purge import normalize as normalize_purge
+        params['purge'] = normalize_purge(params.get('purge'))
         params['pauseEnabled'] = params.get('pauseEnabled') is not False
         params['tariffs']['pause']['enabled'] = params['pauseEnabled']
         params['tariffs'] = {key:params['tariffs'].get(key,{}) for key in defaults['tariffs']}
@@ -210,6 +212,8 @@ class WashRuntime:
         self.parameter_key = 'dry_fog_parameters' if device_type == 'dry_fog' else 'wash_parameters'
         self.lock = threading.RLock()
         self._wallet_pending_snapshot = None
+        self._purge_idle_since = time.monotonic()
+        self._purge_until = None
         self.shared_wallet_enabled = False
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
@@ -350,6 +354,8 @@ class WashRuntime:
             )
             conn.commit()
         with self.lock:
+            from .dry_fog_purge import cancel
+            cancel(self)
             self.params = normalized
         return normalized
 
@@ -419,6 +425,8 @@ class WashRuntime:
             raise ValueError(f"Unknown wash mode: {mode}")
 
         with self.lock:
+            from .dry_fog_purge import cancel
+            cancel(self)
             if self.state.get('deviceProfileMismatch') and mode!='pause':
                 raise ValueError('Installer must apply the matching device profile')
             if self.state.get("walletTransferPending") and mode != "pause":
@@ -605,6 +613,8 @@ class WashRuntime:
         bonus_sum: int | None = None,
     ) -> dict[str, Any]:
         with self.lock:
+            from .dry_fog_purge import cancel
+            cancel(self)
             if self.shared_wallet_enabled and self.active_session_source=='vip' and source!='vip':
                 raise ValueError('Денежное пополнение не смешивается с VIP-допуском')
             if self.state.get("licenseLocked") and source != "admin":
@@ -803,6 +813,8 @@ class WashRuntime:
 
     def tick(self) -> None:
         if self.state.get("deviceProfileMismatch"):
+            from .dry_fog_purge import cancel
+            with self.lock:cancel(self)
             self._apply_output_sync(None)
             return
         if getattr(self,'_click_credit_pending',None):
@@ -887,6 +899,11 @@ class WashRuntime:
             self.io_failures = 0
             self.state["lastIoOk"] = True
             self.state["lastError"] = None
+            bill_filter=io.get('bill_filter')
+            if isinstance(bill_filter,dict):
+                self.state['billInputReady']=bool(io.get('nv9_enabled') and io.get('nv9_listener_alive') and bill_filter.get('ready'))
+                self.state['billInputFault']=bill_filter.get('fault')
+
 
             bill_delta = 0 if io.get("nv9_stream_id") else max(0, bill_pulses - self.last_bill_pulses)
             coin_delta = max(0, coin_pulses - self.last_coin_pulses)
@@ -1084,6 +1101,8 @@ class WashRuntime:
             )
 
             if self.state.get("walletTransferPending"):
+                from .dry_fog_purge import cancel
+                cancel(self)
                 self.state["phase"]="wallet_transfer_pending"
                 self.state["activeMode"]=None
                 self.state["requestedOutput"]=None
@@ -1093,6 +1112,8 @@ class WashRuntime:
                 return
 
             if skip_runtime:
+                from .dry_fog_purge import cancel
+                cancel(self)
                 self.state["requestedOutput"] = None
                 self.state["updatedAt"] = now_iso()
                 self._apply_output_sync(None)
@@ -1410,6 +1431,14 @@ class WashRuntime:
                 self._heartbeat_session_locked()
                 self.last_ledger_flush = time.monotonic()
             self._maybe_cleanup_retention_locked()
+            if self.device_type == 'dry_fog':
+                from .dry_fog_purge import requested
+                technical = requested(self, now)
+                if technical:
+                    self.state['requestedOutput'] = technical
+                    # Serialize maintenance ON with incoming money and NFC OFF.
+                    self._apply_output_sync(technical)
+                    return
 
         self._apply_output_sync(requested_output)
 
@@ -1432,6 +1461,8 @@ class WashRuntime:
         return spent_sum
 
     def _accept_cash_locked(self,amount_sum,source,pulse_count,raw):
+        from .dry_fog_purge import cancel
+        cancel(self)
         from .wallet_payments import defer_vip_cash
         if defer_vip_cash(self,amount_sum,source,pulse_count,raw):return
         from .bonus import award, add
@@ -2689,6 +2720,9 @@ class WashRuntime:
 
     def _io_fault(self,message):
         with self.lock:
+            self._purge_idle_since = time.monotonic()
+            self._purge_until = None
+            self.state.update(purgeActive=False, purgeRemainingSeconds=0)
             self.state.update(lastIoOk=False,lastError=message,phase='error',selectedMode='pause',armedMode=None,
                               activeMode=None,requestedOutput=None,pauseState='none',
                               resumeRequiresTriggerReset=bool(self.state.get('totalStopActive')),updatedAt=now_iso())
@@ -2725,7 +2759,11 @@ class WashRuntime:
         if output == self.last_output:
             return
 
-        if output is not None and output not in self.mode_outputs:
+        if output is not None and output not in self.mode_outputs and not (
+            output == 'purge' and self.device_type == 'dry_fog' and self._purge_until is not None
+            and self.state.get('purgeActive') and not self.state.get('creditSum')
+            and not self.active_session_id and not self.state.get('walletTransferPending')
+        ):
             raise ValueError(f"Unsupported output: {output}")
 
         try:

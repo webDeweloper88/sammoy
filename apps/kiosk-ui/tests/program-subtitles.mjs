@@ -11,7 +11,7 @@ try{
  else if(path==='/api/kiosk/payment-options')data={click:{enabled:false}};else throw Error(path)
  await r.fulfill({json:data})})
  for(design of ['cards','wheel']){
-  await p.goto(origin+'/wash');await p.locator(`.wash-kiosk[data-design=${design}]`).waitFor()
+  await p.route('**/api/commissioning/state',r=>r.fulfill({json:{complete:true}}));await p.goto(origin+'/wash');await p.locator(`.wash-kiosk[data-design=${design}]`).waitFor()
   for(const [lang,name] of [['uz','O‘zbekcha'],['ru','Русский'],['kz','Қазақша'],['ky','Кыргызча']]){
    await p.getByRole('button',{name,exact:true}).click();const nameByLang={uz:'SUV',ru:'ВОДА',kz:'СУ',ky:'СУУ'};const selector=design==='cards'?`.program-card[aria-label="${nameByLang[lang]}"] small`:`.wheel-segment[aria-label="${nameByLang[lang]}"] .segment-description`;await p.waitForFunction(({selector,text})=>document.querySelector(selector)?.textContent===text,{selector,text:description[lang]})
   }

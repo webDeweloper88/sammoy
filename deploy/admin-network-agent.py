@@ -13,12 +13,34 @@ import socket
 import struct
 import time
 import uuid
+import threading
 
 NM='org.freedesktop.NetworkManager'
 ROOT='/org/freedesktop/NetworkManager'
 PROPS='org.freedesktop.DBus.Properties'
 STATE=Path(os.environ.get('ADMIN_NETWORK_STATE','/var/lib/sammoy2-admin/network-pending.json'))
 SOCKET=os.environ.get('ADMIN_NETWORK_SOCKET','/run/sammoy2-admin/network.sock')
+TEMP=Path('/run/sammoy2-admin/temporary-wifi.json')
+ACTION_LOCK=threading.RLock()
+
+def read_temporary():
+    try:return json.loads(TEMP.read_text())
+    except (OSError,ValueError):return None
+
+def save_temporary(value):
+    TEMP.parent.mkdir(parents=True,exist_ok=True)
+    temporary=TEMP.with_suffix('.tmp')
+    fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+    with os.fdopen(fd,'w') as stream:json.dump(value,stream)
+    temporary.replace(TEMP)
+
+def overlapping_networks(interfaces):
+    networks={}
+    for item in interfaces:
+        if item.get('connected') and item.get('address'):
+            try:networks[item['interface']]=ipaddress.ip_network(f"{item['address']}/{item['prefix']}",strict=False)
+            except ValueError:pass
+    return bool(networks.get('eth0') and networks.get('wlan0') and networks['eth0'].overlaps(networks['wlan0']))
 
 class NetworkError(Exception):pass
 
@@ -29,6 +51,9 @@ def validate(payload):
     mode=payload.get('mode','dhcp')
     if mode not in ('dhcp','static'):raise ValueError('Choose DHCP or static IPv4')
     result={'interface':interface,'mode':mode}
+    if payload.get('temporary'):
+        if interface!='wlan0' or mode!='dhcp':raise ValueError('Temporary internet requires Wi-Fi with DHCP')
+        result['temporary']=True
     if mode=='static':
         prefix=int(payload.get('prefix',24))
         if not 8<=prefix<=30:raise ValueError('Prefix must be between 8 and 30')
@@ -58,6 +83,11 @@ def connection_settings(config):
         profile['802-11-wireless']={'ssid':dbus.ByteArray(config['ssid'].encode()),'mode':'infrastructure','hidden':dbus.Boolean(True)}
         profile['802-11-wireless-security']={'key-mgmt':config['security'],'psk':config['password'],'psk-flags':dbus.UInt32(0)}
         if config['security']=='sae':profile['802-11-wireless-security']['pmf']=dbus.Int32(3)
+        if config.get('temporary'):
+            profile['connection']['id']='LABRIX temporary setup internet'
+            for version in ('ipv4','ipv6'):
+                profile[version]['route-metric']=dbus.Int64(5)
+                profile[version]['dns-priority']=dbus.Int32(-50)
     else:profile['802-3-ethernet']=dbus.Dictionary({},signature='sv')
     return dbus.Dictionary({k:dbus.Dictionary(v,signature='sv') for k,v in profile.items()},signature='sa{sv}')
 
@@ -100,7 +130,11 @@ class Network:
                 current['dns']=[str(d['address']) for d in data.get('NameserverData',[]) if 'address' in d][:2]
             interfaces.append(current)
         pending=self.pending()
-        return {'ok':True,'interfaces':interfaces,'pending':{'id':pending['id'],'interface':pending['interface'],'expires_at':pending['expires_at']} if pending else None}
+        temporary=read_temporary()
+        return {'ok':True,'interfaces':interfaces,
+                'pending':{'id':pending['id'],'interface':pending['interface'],'expires_at':pending['expires_at'],'temporary':pending.get('temporary',False)} if pending else None,
+                'temporary_wifi':{k:temporary.get(k) for k in ('id','ssid','expires_at','disconnect_at')} if temporary else None,
+                'temporary_subnet_conflict':bool(pending and pending.get('temporary') and overlapping_networks(interfaces))}
     def wifi(self):
         device=self.nm.GetDeviceByIpIface('wlan0');wifi=self.interface(device,NM+'.Device.Wireless')
         try:wifi.RequestScan(dbus.Dictionary({},signature='sv'))
@@ -116,15 +150,22 @@ class Network:
         return {'ok':True,'networks':sorted(networks.values(),key=lambda n:-n['signal'])[:30]}
     def apply(self,payload):
         config=validate(payload)
+        if read_temporary():raise NetworkError('Сначала отключите временный Wi-Fi установки')
         if self.pending():raise NetworkError('Подтвердите или отмените предыдущую настройку сети')
         if list(self.props(ROOT,NM).get('Checkpoints',[])):raise NetworkError('NetworkManager already has a pending checkpoint')
         device=self.nm.GetDeviceByIpIface(config['interface'])
+        previous_connection='/'
+        if config.get('temporary'):
+            active=self.props(device,NM+'.Device').get('ActiveConnection','/')
+            if active!='/':previous_connection=str(self.props(active,NM+'.Connection.Active')['Connection'])
         # A checkpoint belongs to this physical device, never Docker bridges.
         expires_at=time.time()+90
         checkpoint=self.nm.CheckpointCreate(dbus.Array([device],signature='o'),dbus.UInt32(90),dbus.UInt32(2))
         try:
             connection,active,_=self.nm.AddAndActivateConnection2(connection_settings(config),device,dbus.ObjectPath('/'),dbus.Dictionary({'persist':'memory'},signature='sv'))
             pending={'id':str(uuid.uuid4()),'checkpoint':str(checkpoint),'connection':str(connection),'active':str(active),'device':str(device),'interface':config['interface'],'expires_at':expires_at}
+            if config.get('temporary'):
+                pending.update(temporary=True,previous_connection=previous_connection,ssid=config['ssid'])
             self.save_pending(pending)
         except Exception:
             self.nm.CheckpointRollback(checkpoint)
@@ -140,6 +181,20 @@ class Network:
         prop=self.props(pending['device'],NM+'.Device')
         if int(prop['State'])!=100 or str(prop.get('ActiveConnection'))!=pending['active']:raise NetworkError('Новое подключение ещё не установлено')
         connection=self.interface(pending['connection'],NM+'.Settings.Connection')
+        if pending.get('temporary'):
+            status=self.status()
+            if status['temporary_subnet_conflict']:
+                self.rollback({'id':pending['id']})
+                raise NetworkError('Подсеть телефона совпадает с Ethernet. Измените подсеть точки доступа или используйте офлайн-активацию.')
+            wifi=next((i for i in status['interfaces'] if i['interface']=='wlan0'),{})
+            if not wifi.get('address') or not wifi.get('gateway'):
+                raise NetworkError('Дождитесь получения Wi-Fi адреса и шлюза')
+            # AddAndActivateConnection2(persist=memory) already holds the PSK in
+            # RAM. Never call GetSecrets/Update2 or enable autoconnect here.
+            save_temporary({k:pending[k] for k in ('id','connection','active','device','previous_connection','ssid')} | {'expires_at':time.time()+7200})
+            self.nm.CheckpointDestroy(pending['checkpoint'])
+            STATE.unlink(missing_ok=True)
+            return self.status()
         values=connection.GetSettings()
         if '802-11-wireless-security' in values:
             secrets=connection.GetSecrets('802-11-wireless-security')
@@ -159,6 +214,62 @@ class Network:
         STATE.unlink(missing_ok=True)
         return self.status()
 
+    def temporary_connect(self,payload):
+        # The caller cannot change Ethernet, routes or the retention duration.
+        return self.apply({'interface':'wlan0','mode':'dhcp','temporary':True,
+                           'ssid':payload.get('ssid',''),'password':payload.get('password',''),
+                           'security':payload.get('security','wpa-psk')})
+
+    def temporary_finish(self,payload):
+        value=read_temporary()
+        if not value:return {'ok':True,'scheduled':False}
+        value['disconnect_at']=time.time()+30
+        save_temporary(value)
+        return {'ok':True,'scheduled':True,'disconnect_at':value['disconnect_at']}
+
+    def temporary_disconnect(self,payload):
+        pending=self.pending()
+        if pending:
+            if pending.get('temporary'):return self.rollback({'id':pending['id']})
+            raise NetworkError('Сначала подтвердите или отмените настройку сети')
+        value=read_temporary()
+        if not value:return self.status()
+        prop=self.props(value['device'],NM+'.Device')
+        active=str(prop.get('ActiveConnection','/'))
+        managed=active==value['active']
+        if managed:self.nm.DeactivateConnection(value['active'])
+        # Delete only our memory profile. Never delete saved Wi-Fi profiles.
+        try:
+            connection=self.interface(value['connection'],NM+'.Settings.Connection')
+            if str(connection.GetSettings()['connection']['id'])!='LABRIX temporary setup internet':
+                raise NetworkError('Временный профиль был изменён: требуется проверка установщика')
+            connection.Delete()
+        except dbus.DBusException as error:
+            if 'UnknownConnection' not in error.get_dbus_name() and 'UnknownObject' not in error.get_dbus_name():raise
+        TEMP.unlink(missing_ok=True)
+        warning=''
+        if (managed or active=='/') and value['previous_connection']!='/':
+            try:self.nm.ActivateConnection(value['previous_connection'],value['device'],dbus.ObjectPath('/'))
+            except dbus.DBusException:warning='Временный Wi-Fi удалён. Прежний Wi-Fi пока недоступен; проверьте состояние сети.'
+        result=self.status()
+        if warning:result['warning']=warning
+        return result
+
+def temporary_watchdog():
+    while True:
+        time.sleep(1)
+        with ACTION_LOCK:
+            value=read_temporary()
+            if not value or min(value['expires_at'],value.get('disconnect_at',float('inf')))>time.time():continue
+            network=None
+            try:
+                network=Network();network.temporary_disconnect({})
+            except Exception:
+                # Retry when NetworkManager is available; never persist PSKs.
+                pass
+            finally:
+                if network:network.close()
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
     def reply(self,status,data):
@@ -167,7 +278,7 @@ class Handler(BaseHTTPRequestHandler):
         network=None
         try:
             action=self.path.strip('/')
-            allowed=('apply','confirm','rollback') if post else ('status','wifi')
+            allowed=('apply','confirm','rollback','temporary-connect','temporary-disconnect','temporary-finish') if post else ('status','wifi')
             if action not in allowed:self.reply(404,{'detail':'Not found'});return
             network=Network()
             if post:
@@ -175,7 +286,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not 0<length<=8192:raise ValueError('Invalid body length')
                 payload=json.loads(self.rfile.read(length))
                 if not isinstance(payload,dict):raise ValueError('JSON object required')
-                result=getattr(network,action)(payload)
+                result=getattr(network,action.replace('-','_'))(payload)
             else:result=getattr(network,action)()
             self.reply(200,result)
         except (ValueError,TypeError) as e:self.reply(422,{'detail':str(e)})
@@ -183,11 +294,14 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:self.reply(503,{'detail':'NetworkManager не выполнил запрос. Прежний профиль сохранён.'})
         finally:
             if network:network.close()
-    def do_GET(self):self.handle_api()
-    def do_POST(self):self.handle_api(True)
+    def do_GET(self):
+        with ACTION_LOCK:self.handle_api()
+    def do_POST(self):
+        with ACTION_LOCK:self.handle_api(True)
 
 if __name__=='__main__':
     Path(SOCKET).parent.mkdir(parents=True,exist_ok=True)
     Path(SOCKET).unlink(missing_ok=True)
     server=UnixStreamServer(SOCKET,Handler);os.chmod(SOCKET,0o600)
+    threading.Thread(target=temporary_watchdog,name='temporary-wifi-cleanup',daemon=True).start()
     server.serve_forever()

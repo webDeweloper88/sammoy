@@ -69,7 +69,7 @@ def configuration():
         row=conn.execute("SELECT setting_value FROM app_settings WHERE setting_key='shared_wallet'").fetchone()
     ident=identity()
     defaults={'enabled':False,'primary_post':1,'standby_post':None,'generation':1,
-              'single_node':False,'standby_ready':False,'visit_timeout_minutes':30,'peer_urls':{},
+              'single_node':False,'standby_ready':False,'management_pending':None,'management_last':None,'visit_timeout_minutes':30,'peer_urls':{},
               'device_wallet_enabled':False,'device_types':{},'bonus_mode':'shared'}
     cfg={**defaults,**(row['setting_value'] if row else {})}
     cfg.update(site_id=str(ident.get('site_code') or ''),local_post=int(ident.get('post_no') or 1))
@@ -83,13 +83,15 @@ def configuration():
 
 
 def authority(cfg):
+    if cfg.get('management_pending'):
+        raise WalletUnavailable('Изменение ролей ещё не завершено. Операции кошелька временно приостановлены.')
     if not cfg['enabled'] or not cfg['site_id'] or not cfg.get('standby_post'):
         raise WalletUnavailable('Shared wallet has not been commissioned')
     return Authority(cfg['site_id'],cfg['local_post'],cfg['primary_post'],cfg['standby_post'],cfg['generation'],cfg['single_node'])
 
 
 @contextmanager
-def store_context(cfg):
+def store_context(cfg, *, allow_management=False):
     with psycopg.connect(settings.database_url,autocommit=True,row_factory=dict_row,connect_timeout=3) as conn:
         # Session advisory lock spans network round trips. Other processes and
         # role changes must use the same lock, not merely a process-local mutex.
@@ -97,8 +99,10 @@ def store_context(cfg):
         conn.execute('SELECT pg_advisory_lock(hashtextextended(%s,0))',(key,))
         try:
             row=conn.execute("SELECT setting_value FROM app_settings WHERE setting_key='shared_wallet'").fetchone()
-            if row and row['setting_value'].get('enabled') and any(row['setting_value'].get(k)!=cfg.get(k) for k in ('primary_post','standby_post','generation')):
+            if row and row['setting_value'].get('enabled') and any(row['setting_value'].get(k)!=cfg.get(k) for k in ('primary_post','standby_post','generation','single_node')):
                 raise WalletConflict('Wallet authority changed while waiting for the journal lock')
+            if row and row['setting_value'].get('management_pending') and not allow_management:
+                raise WalletUnavailable('Изменение ролей ещё не завершено. Дождитесь проверки данных.')
             yield WalletStore(conn,cfg['site_id'])
         finally:conn.execute('SELECT pg_advisory_unlock(hashtextextended(%s,0))',(key,))
 
@@ -143,9 +147,23 @@ def coordinator(store,cfg):
 
 def persist_configuration(cfg,user,action):
     value={key:cfg[key] for key in ('enabled','primary_post','standby_post','generation','single_node','standby_ready','visit_timeout_minutes','peer_urls')}
+    value.update(management_pending=cfg.get('management_pending'),management_last=cfg.get('management_last'))
     with db() as conn:
-        conn.execute("""INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES('shared_wallet',%s,now())
-            ON CONFLICT(setting_key) DO UPDATE SET setting_value=EXCLUDED.setting_value,updated_at=now()""",(Jsonb(value),))
+        updated=conn.execute("""INSERT INTO app_settings(setting_key,setting_value,updated_at) VALUES('shared_wallet',%s,now())
+            ON CONFLICT(setting_key) DO UPDATE SET setting_value=EXCLUDED.setting_value,updated_at=now()
+            WHERE (COALESCE((app_settings.setting_value->>'generation')::bigint,1)
+                  <= COALESCE((EXCLUDED.setting_value->>'generation')::bigint,1)
+                   OR (app_settings.setting_value->'management_pending'->>'stage'='prepared'
+                       AND app_settings.setting_value->>'standby_ready'='false'
+                       AND EXCLUDED.setting_value->'management_last'->>'stage'='aborted'
+                       AND app_settings.setting_value->'management_pending'->>'request_id'=EXCLUDED.setting_value->'management_last'->>'request_id'))
+              AND (COALESCE(app_settings.setting_value->'management_pending'->>'request_id','')=''
+                   OR app_settings.setting_value->'management_pending'->>'request_id'=EXCLUDED.setting_value->'management_pending'->>'request_id'
+                   OR app_settings.setting_value->'management_pending'->>'request_id'=EXCLUDED.setting_value->'management_last'->>'request_id')
+              AND NOT (COALESCE(EXCLUDED.setting_value->'management_pending'->>'request_id','')<>''
+                   AND EXCLUDED.setting_value->'management_pending'->>'request_id'=COALESCE(app_settings.setting_value->'management_last'->>'request_id','')
+                   AND COALESCE(app_settings.setting_value->'management_last'->>'stage','') IN ('completed','retired','aborted','superseded'))""",(Jsonb(value),))
+        if updated.rowcount==0:raise WalletConflict('Роли изменились во время операции. Обновите состояние.')
         conn.execute("""INSERT INTO system_events(level,event_type,source,message,context)
             VALUES('warning',%s,'wallet-owner',%s,%s)""",(action,action,Jsonb({'actor':user['login'],'primary':cfg['primary_post'],
                 'standby':cfg['standby_post'],'generation':cfg['generation'],'single_node':cfg['single_node'],'standby_ready':cfg.get('standby_ready',False)})))
@@ -175,15 +193,25 @@ class PromoteRequest(BaseModel):
     confirmation:str
 
 
+def last_sync_at(cfg):
+    # Full factory reset clears site events; a failed sync never advances this.
+    with db() as conn:
+        row=conn.execute("""SELECT max(created_at) AS synced_at FROM system_events
+            WHERE event_type IN ('wallet_replication_restored','wallet_standby_ready')
+              AND context @> %s""",(Jsonb({'primary':cfg['primary_post'],'standby':cfg['standby_post'],'generation':cfg['generation']}),)).fetchone()
+    return row['synced_at'].isoformat() if row and row.get('synced_at') else None
+
+
 @router.get('/owner/wallet')
 def owner_status(user:Owner):
     cfg=configuration()
     if not cfg['enabled']:
         return {'ok':True,'configuration':cfg,'role':'not-configured'}
-    with control_lock,store_context(cfg) as store:
+    with control_lock,store_context(cfg,allow_management=True) as store:
         counts=store.conn.execute("SELECT count(*) FILTER(WHERE status!='abandoned') AS operations,count(*) FILTER(WHERE status='prepared') AS pending FROM shared_wallet_operations WHERE site_id=%s",(store.site_id,)).fetchone()
     return {'ok':True,'configuration':cfg,'role':'primary' if cfg['local_post']==cfg['primary_post'] else 'standby' if cfg['local_post']==cfg['standby_post'] else 'post',
             'operation_count':counts['operations'],'pending_count':counts['pending'],
+            'last_synchronization_at':last_sync_at(cfg),
             'redundancy':'single-copy' if cfg['single_node'] else 'requires-standby'}
 
 
@@ -302,6 +330,9 @@ def setup(payload:SetupRequest,user:Installer):
         raise HTTPException(422,'Главный и резервный посты должны различаться')
     try:peers={str(int(k)):validate_peer_url(v) for k,v in payload.peer_urls.items()}
     except (ValueError,TypeError):raise HTTPException(422,'Укажите номера постов и локальные IP-адреса') from None
+    addresses=[(str(ipaddress.ip_address(urlsplit(url).hostname)),urlsplit(url).port or 80) for url in peers.values()]
+    if len(set(addresses))!=len(addresses):
+        raise HTTPException(422,'У каждого поста должен быть свой IP-адрес. Проверьте адреса главного и резервного.')
     if any(str(post) not in peers for post in (payload.primary_post,payload.standby_post)):
         raise HTTPException(422,'Нужны адреса главного и резервного постов')
     with control_lock,wash_runtime.lock:
@@ -373,8 +404,8 @@ def synchronize(user:Owner):
             rpc(cfg,cfg['standby_post'],'rejoin',{'primary_post':cfg['primary_post'],
                 'standby_post':cfg['standby_post'],'generation':cfg['generation'],
                 'visit_timeout_minutes':cfg['visit_timeout_minutes'],'peer_urls':cfg['peer_urls']})
-            cfg['single_node']=False
             with store_context(cfg) as store:
+                cfg['single_node']=False
                 pending=rpc(cfg,cfg['standby_post'],'replica-pending',authority(cfg).envelope({}))['operation_ids']
                 known=[operation_id for operation_id in pending if store._operation(operation_id) and store._operation(operation_id)['status']!='abandoned']
                 rpc(cfg,cfg['standby_post'],'replica-reconcile',authority(cfg).envelope({'operation_ids':known}))
@@ -398,10 +429,11 @@ def internal(action:str,body:dict,x_wallet_signature:Annotated[str|None,Header()
     cfg=configuration();secret=str(identity().get('site_token') or '')
     path='/api/wallet/internal/'+action
     stamp=body.get('timestamp')
-    if not secret or not cfg['enabled'] or body.get('site_id')!=cfg['site_id'] or type(stamp) is not int or abs(time.time()-stamp)>60 or not hmac.compare_digest(x_wallet_signature or '',signature(secret,path,body)):
+    bootstrap=not cfg['enabled'] and action in ('management-probe','management-prepare','management-abort')
+    if not secret or (not cfg['enabled'] and not bootstrap) or body.get('site_id')!=cfg['site_id'] or type(stamp) is not int or abs(time.time()-stamp)>60 or not hmac.compare_digest(x_wallet_signature or '',signature(secret,path,body)):
         raise HTTPException(401,'Invalid site wallet authentication')
     sender=body.get('sender_post')
-    if type(sender) is not int or not 1<=sender<=100 or (str(sender) not in cfg['peer_urls'] and action!='enroll'):
+    if type(sender) is not int or not 1<=sender<=100 or (str(sender) not in cfg['peer_urls'] and action!='enroll' and not bootstrap):
         raise HTTPException(403,'Post is not enrolled in the wallet')
     payload=body.get('payload')
     if not isinstance(payload,dict):raise HTTPException(422,'Payload required')
@@ -433,7 +465,17 @@ def internal(action:str,body:dict,x_wallet_signature:Annotated[str|None,Header()
     with control_lock:
         cfg=configuration()
         try:
-            if action=='enroll':
+            if action.startswith('management-'):
+                expected_ip=urlsplit(cfg['peer_urls'].get(str(sender),'')).hostname
+                if bootstrap and action=='management-probe':
+                    expected_ip=x_real_ip if x_real_ip and ipaddress.ip_address(x_real_ip).is_private else None
+                elif bootstrap:
+                    expected_ip=urlsplit(payload.get('peer_urls',{}).get(str(sender),'')).hostname
+                if not x_real_ip or not expected_ip or ipaddress.ip_address(x_real_ip)!=ipaddress.ip_address(expected_ip):
+                    raise WalletConflict('Адрес отправителя не совпадает с зарегистрированным постом')
+                from .wallet_management import internal as manage_internal
+                result=manage_internal(action.removeprefix('management-'),payload,cfg,sender)
+            elif action=='enroll':
                 auth=authority(cfg);auth.require_primary()
                 url=validate_peer_url(payload.get('url',''))
                 if not x_real_ip or ipaddress.ip_address(urlsplit(url).hostname)!=ipaddress.ip_address(x_real_ip):
@@ -467,7 +509,11 @@ def internal(action:str,body:dict,x_wallet_signature:Annotated[str|None,Header()
                 promoted=sender==cfg['standby_post'] and payload.get('generation')==cfg['generation']+1
                 if not (current or promoted) or payload.get('primary_post')!=sender or payload.get('standby_post')!=cfg['local_post']:
                     raise WalletConflict('Invalid primary rejoin announcement')
-                with store_context(cfg):
+                job=cfg.get('management_pending')
+                superseded=bool(promoted and job and job.get('stage')=='activating' and job.get('after')=={k:cfg[k] for k in ('primary_post','standby_post','generation')})
+                with (store_context(cfg,allow_management=True) if superseded else store_context(cfg)):
+                    if superseded:
+                        cfg['management_pending']=None;cfg['management_last']={**job,'stage':'superseded','error':None}
                     cfg.update(primary_post=sender,standby_post=cfg['local_post'],generation=payload['generation'],
                                single_node=False,standby_ready=False,visit_timeout_minutes=payload['visit_timeout_minutes'],
                                peer_urls={str(int(k)):validate_peer_url(v) for k,v in payload.get('peer_urls',cfg['peer_urls']).items()})
@@ -492,8 +538,11 @@ def internal(action:str,body:dict,x_wallet_signature:Annotated[str|None,Header()
                 result={'ok':True,'bonus_protocol':1,'vip_import_protocol':1,'device_wallet_protocol':2,'device_policy':cfg.get('device_policy'),'device_types':cfg.get('device_types',{}),'device_wallet_enabled':cfg.get('device_wallet_enabled',False),'bonus_mode':cfg.get('bonus_mode','shared'),'primary_post':cfg['primary_post'],'standby_post':cfg['standby_post'],
                         'generation':cfg['generation'],'local_post':cfg['local_post'],'single_node':cfg['single_node'],'standby_ready':cfg.get('standby_ready',False)}
             else:
-                auth=authority(cfg)
-                with store_context(cfg) as store:
+                from .wallet_management import REPLICA_ACTIONS
+                job=cfg.get('management_pending')
+                copying=bool(job and action in REPLICA_ACTIONS and job.get('after')=={k:cfg[k] for k in ('primary_post','standby_post','generation')} and cfg['local_post']==cfg['standby_post'])
+                auth=authority({**cfg,'management_pending':None} if copying else cfg)
+                with (store_context(cfg,allow_management=True) if copying else store_context(cfg)) as store:
                     if action=='device-policy-read':
                         result={'ok':True,'policy':cfg.get('device_policy'),'configuration':{k:cfg[k] for k in ('primary_post','local_post','peer_urls')}}
                     elif action=='diagnostics':
@@ -549,12 +598,10 @@ def internal(action:str,body:dict,x_wallet_signature:Annotated[str|None,Header()
                                 incoming={k:v for k,v in command.items() if k!='profile_override'}
                                 if old!=incoming:raise WalletConflict('Operation ID reused with different contents')
                                 command=existing['command']
-                        from .wash_logic import wash_runtime
-                        if command.get('wallet_protocol')==2:
-                            from .wallet_devices import site_policy
-                            policy=site_policy(cfg)
-                        else:
-                            policy=WalletPolicy(cfg['visit_timeout_minutes'],int(wash_runtime.params['freePauseSeconds']*1000),int(wash_runtime.params['tariffs']['water']['amountSum']),int(wash_runtime.params['tariffs']['water']['durationSeconds']))
+                        # Legacy wash commands can reach a dry-fog primary too.
+                        # References belong to the service, not this controller.
+                        from .wallet_devices import site_policy
+                        policy=site_policy(cfg)
                         result=coordinator(store,cfg).execute(payload['operation_id'],payload['uid'],command,policy)
                     elif action=='customer-registry':
                         auth.require_primary()
@@ -650,3 +697,14 @@ def wallet_recovery_restore(recovery_id:int,payload:RecoveryRequest,user:Owner):
         with wash_runtime.lock:
             return restore_recovery(recovery_id,payload.uid.upper(),str(user['login']))
     except (WalletConflict,WalletUnavailable) as exc:raise HTTPException(409,str(exc)) from None
+
+
+@router.get('/owner/wallet/availability')
+def owner_availability(user:Installer):
+    from .wallet_availability import observe
+    cfg=configuration()
+    return observe(cfg,lambda post:rpc(cfg,post,'status',{}))
+
+
+@router.get('/admin/wallet/availability')
+def admin_availability(user:Installer):return owner_availability(user)

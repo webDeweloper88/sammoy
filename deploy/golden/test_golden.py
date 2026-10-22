@@ -31,6 +31,18 @@ class GoldenTests(unittest.TestCase):
                 self.assertEqual(before,(root/'.env').read_bytes())
                 self.assertEqual((root/'.env').stat().st_mode & 0o777,0o600)
             self.assertNotEqual((clones[0]/'.env').read_bytes(),(clones[1]/'.env').read_bytes())
+            values=[]
+            for root in clones:
+                env=dict(line.split('=',1) for line in (root/'.env').read_text().splitlines())
+                self.assertEqual(env['WASH_ENGINE_DEFAULT_OWNER_PASSWORD'],'labrix')
+                self.assertEqual(env['WASH_ENGINE_DEFAULT_ADMIN_PASSWORD'],'labrix')
+                handover=json.loads((root/'factory-access.json').read_text())
+                self.assertTrue(handover['must_change_password'])
+                self.assertEqual(handover['owner'],'labrix')
+                self.assertEqual(handover['admin'],'labrix')
+                values.append(env)
+            for key in ('POSTGRES_PASSWORD','WASH_ENGINE_JWT_SECRET','TELEGRAM_SETUP_KEY','REPORT_API_KEY'):
+                self.assertNotEqual(values[0][key],values[1][key])
     def test_live_data_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'GOLDEN_TEMPLATE.json').write_text('{}')

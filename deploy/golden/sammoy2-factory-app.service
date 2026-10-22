@@ -1,7 +1,7 @@
 [Unit]
 Description=LABRIX initialize fresh application on cloned card
-After=docker.service sammoy2-factory-identity.service sammoy2-pn532-i2c.service
-Requires=docker.service sammoy2-factory-identity.service
+After=docker.service sammoy2-factory-identity.service sammoy2-factory-images.service sammoy2-post.service sammoy2-pn532-i2c.service
+Requires=docker.service sammoy2-factory-identity.service sammoy2-factory-images.service sammoy2-post.service
 ConditionPathExists=/var/lib/sammoy2/factory-pending
 
 [Service]

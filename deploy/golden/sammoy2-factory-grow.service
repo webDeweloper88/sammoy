@@ -1,0 +1,14 @@
+[Unit]
+Description=LABRIX expand new factory card to its full capacity
+After=local-fs.target
+Before=sammoy2-factory-identity.service
+ConditionPathExists=/var/lib/sammoy2/grow-pending
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/sammoy/sammoy2/deploy/golden/grow-card.py
+TimeoutStartSec=180
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

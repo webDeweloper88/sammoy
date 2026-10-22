@@ -1,0 +1,8 @@
+<!doctype html><html><head><meta charset="utf-8"></head><body><div id="app"></div><script type="module">
+import {createApp} from 'vue'
+import '../src/style.css'
+import '../src/owner.css'
+import '../src/touch.css'
+import PostManagement from '../src/PostManagement.vue'
+createApp(PostManagement,{token:'fixture-owner',language:new URLSearchParams(location.search).get('lang')||'ru',availability:{nodes:[{post:1,state:'available'},{post:2,state:'available'}]}}).mount('#app')
+</script></body></html>

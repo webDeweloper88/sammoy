@@ -18,7 +18,7 @@ try{
   else throw Error('Unexpected API '+path)
   await r.fulfill({json:data})
  })
- await p.goto(origin+'/wash');await p.getByRole('button',{name:'Operatorni chaqirish',exact:true}).waitFor()
+ await p.route('**/api/commissioning/state',r=>r.fulfill({json:{complete:true}}));await p.goto(origin+'/wash');await p.getByRole('button',{name:'Operatorni chaqirish',exact:true}).waitFor()
  await p.getByRole('button',{name:'Operatorni chaqirish',exact:true}).click();await p.getByRole('dialog').getByText('Operatorga xabar yuborildi',{exact:true}).waitFor();await p.getByRole('dialog').getByRole('button',{name:'Yopish',exact:true}).first().click()
  await p.getByRole('button',{name:'Operatorni chaqirish',exact:true}).click();await p.getByRole('dialog').getByText('Operatorga xabar yuborildi',{exact:true}).waitFor();assert.equal(posts.length,1);await p.getByRole('dialog').getByRole('button',{name:'Yopish',exact:true}).first().click()
  for(theme of ['dark','light']){

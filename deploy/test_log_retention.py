@@ -12,4 +12,4 @@ class Tests(unittest.TestCase):
         with patch.object(m.subprocess,'run') as run:m.main()
         args=[x.args[0] for x in run.call_args_list]
         self.assertEqual(args[0],['journalctl','--rotate'])
-        self.assertIn('--vacuum-size=256M',args[1]);self.assertEqual(args[2][:4],['docker','builder','prune','--force'])
+        self.assertIn('--vacuum-size=256M',args[1]);self.assertEqual(args[2],['/usr/bin/python3','/opt/sammoy/sammoy2/deploy/storage-maintenance.py'])

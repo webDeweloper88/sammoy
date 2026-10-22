@@ -13,7 +13,7 @@ try{
  await p.route('**/api/**',async r=>{if(r.request().method()!=='GET')posts.push(r.request().url());const path=new URL(r.request().url()).pathname
  const data=path==='/api/wash/state'?{ok:true,state:s,parameters:{paidPause:{enabled:true,amountSum:1000,durationSeconds:120},tariffs:Object.fromEntries(ids.map(id=>[id,{enabled:true}]))}}:path==='/api/kiosk/settings'?{ok:true,config:{programs:ids.map(id=>({id,visible:true})),theme:{design:'wheel',appearance:{mode:'manual',manualTheme:theme}}}}:{ok:true,click:{enabled:false}};await r.fulfill({json:data})})
  for(theme of ['dark','light']){
-  s={...base};await p.goto(origin+'/wash');await p.locator('.wheel-status .active-program-hint').waitFor();assert.equal(await p.locator('.wash-status img').count(),0);assert.equal(await p.locator('.status-value').evaluate(e=>getComputedStyle(e).color),theme==='light'?'rgb(11, 35, 56)':'rgb(255, 255, 255)')
+  s={...base};await p.route('**/api/commissioning/state',r=>r.fulfill({json:{complete:true}}));await p.goto(origin+'/wash');await p.locator('.wheel-status .active-program-hint').waitFor();assert.equal(await p.locator('.wash-status img').count(),0);assert.equal(await p.locator('.status-value').evaluate(e=>getComputedStyle(e).color),theme==='light'?'rgb(11, 35, 56)':'rgb(255, 255, 255)')
   const panel=p.locator('.wheel-status')
   if(theme==='light'){
    assert.equal(await p.locator('.wheel-center>circle').first().evaluate(el=>getComputedStyle(el).fill),'rgb(247, 250, 252)');

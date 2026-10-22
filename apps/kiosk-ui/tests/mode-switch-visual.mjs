@@ -17,7 +17,7 @@ try{
   await route.fulfill({contentType:'application/json',body:JSON.stringify(data)})
  })
  for(theme of ['dark','light']){
-  selected='water';commands=0;await page.goto(origin+'/wash');await page.locator(`.wash-kiosk[data-theme=${theme}]`).waitFor()
+  selected='water';commands=0;await page.route('**/api/commissioning/state',r=>r.fulfill({json:{complete:true}}));await page.goto(origin+'/wash');await page.locator(`.wash-kiosk[data-theme=${theme}]`).waitFor()
   const buttons=page.locator('.program-card'),before=await buttons.evaluateAll(els=>els.map(el=>({opacity:getComputedStyle(el).opacity,background:getComputedStyle(el).backgroundColor})))
   await buttons.nth(1).click();await page.locator('.wash-screen[aria-busy=true]').waitFor()
   assert.deepEqual(await buttons.evaluateAll(els=>els.map(el=>({opacity:getComputedStyle(el).opacity,background:getComputedStyle(el).backgroundColor}))),before)

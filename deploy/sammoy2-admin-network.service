@@ -8,6 +8,7 @@ Type=simple
 ExecStart=/usr/bin/python3 /opt/sammoy/sammoy2/deploy/admin-network-agent.py
 RuntimeDirectory=sammoy2-admin
 RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
 StateDirectory=sammoy2-admin
 StateDirectoryMode=0700
 Restart=on-failure

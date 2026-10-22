@@ -1,0 +1,10 @@
+<script setup>
+import {computed} from 'vue'
+const props=defineProps({modelValue:Object,language:String})
+const emit=defineEmits(['update:modelValue'])
+const tr=(ru,uz,en)=>({ru,uz,en}[props.language]||ru)
+function set(key,value){emit('update:modelValue',{...props.modelValue,[key]:value})}
+const minutes=computed({get:()=>props.modelValue.idleSeconds/60,set:v=>set('idleSeconds',Number(v)*60)})
+</script>
+<template><section class="purge-settings"><h3>{{tr('Автопродувка · реле №8','Avtomatik puflash · 8-rele','Automatic purge · relay 8')}}</h3><p>{{tr('Запускается только без баланса и открытого сеанса. При пополнении или прикладывании карты сразу прекращается. После перезапуска отсчёт простоя начинается заново.','Faqat balans va ochiq seans bo‘lmaganda ishlaydi. To‘lov yoki karta yaqinlashtirilganda darhol to‘xtaydi. Qayta yoqilganda kutish vaqti boshidan hisoblanadi.','Runs only without credit or an open session. Stops on payment or card presentation. Restarting the controller restarts the idle timer.')}}</p><label class="check"><input type="checkbox" :checked="modelValue.enabled" @change="set('enabled',$event.target.checked)"/>{{tr('Включить автопродувку','Avtomatik puflashni yoqish','Enable automatic purge')}}</label><div v-if="modelValue.enabled" class="fields"><label>{{tr('Интервал простоя, минут','Bo‘sh turish oralig‘i, daqiqa','Idle interval, minutes')}}<input v-model.number="minutes" type="number" min="1" max="10080" step="1" required/></label><label>{{tr('Длительность продувки, секунд','Puflash davomiyligi, soniya','Purge duration, seconds')}}<input type="number" :value="modelValue.durationSeconds" @input="set('durationSeconds',Number($event.target.value))" min="1" max="300" step="1" required/></label></div></section></template>
+<style scoped>.purge-settings{border-top:1px solid var(--border);padding:20px 0;margin-top:16px}.purge-settings p{line-height:1.6}.purge-settings label{display:flex;flex-direction:column;gap:8px}.purge-settings .check{flex-direction:row;align-items:center}.purge-settings .fields{margin-top:18px}</style>

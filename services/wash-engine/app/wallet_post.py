@@ -65,6 +65,8 @@ def pause_millis(runtime):
 
 
 def freeze(runtime):
+    from .dry_fog_purge import cancel
+    cancel(runtime)
     runtime.state.update(walletTransferPending=True,selectedMode='pause',activeMode=None,requestedOutput=None,
                          phase='wallet_transfer_pending',resumeRequiresTriggerReset=bool(runtime.state.get('totalStopActive')))
     publish = getattr(runtime, '_publish_wallet_pending_locked', None)

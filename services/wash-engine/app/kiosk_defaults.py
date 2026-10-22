@@ -29,7 +29,7 @@ DEFAULT_KIOSK_SETTINGS: dict[str, Any] = {
         "logoUrl": "",
     },
     "theme": {
-        "design": "wheel",
+        "design": "cards",
         "appearance": {"mode": "auto", "manualTheme": "dark", "lightStart": "08:00", "lightEnd": "18:00", "timezone": "Asia/Tashkent"},
         "id": "rtu-wash-classic",
         "preset": "rtu-wash-classic",
@@ -278,7 +278,7 @@ def normalize_kiosk_settings(value: dict[str, Any] | None) -> dict[str, Any]:
     theme = settings.get("theme")
     if not isinstance(theme, dict):
         theme = settings["theme"] = deepcopy(DEFAULT_KIOSK_SETTINGS["theme"])
-    theme["design"] = theme.get("design") if theme.get("design") in ("wheel", "cards") else "wheel"
+    theme["design"] = theme.get("design") if theme.get("design") in ("wheel", "cards") else "cards"
     defaults = DEFAULT_KIOSK_SETTINGS["theme"]["appearance"]
     appearance = theme.get("appearance")
     if not isinstance(appearance, dict):

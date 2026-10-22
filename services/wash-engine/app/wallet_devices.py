@@ -203,7 +203,8 @@ def site_policy(cfg):
     wash=normalize_parameters(values.get('wash_parameters'),'wash')
     fog=normalize_parameters(values.get('dry_fog_parameters'),'dry_fog')
     water=wash['tariffs']['water'];reference=fog['tariffs']['aroma_1']
-    return WalletPolicy(visit_timeout_minutes=cfg['visit_timeout_minutes'],free_pause_millis=int(cfg.get('device_policy',{}).get('wash_pause_seconds',wash['freePauseSeconds'])*1000),
+    device_policy=cfg.get('device_policy') or {}
+    return WalletPolicy(visit_timeout_minutes=cfg['visit_timeout_minutes'],free_pause_millis=int(device_policy.get('wash_pause_seconds',wash['freePauseSeconds'])*1000),
                         water_amount_sum=water['amountSum'],water_duration_seconds=water['durationSeconds'],
-                        dry_fog_pause_millis=int(cfg.get('device_policy',{}).get('dry_fog_pause_seconds',fog['freePauseSeconds'])*1000),dry_fog_amount_sum=reference['amountSum'],
+                        dry_fog_pause_millis=int(device_policy.get('dry_fog_pause_seconds',fog['freePauseSeconds'])*1000),dry_fog_amount_sum=reference['amountSum'],
                         dry_fog_duration_seconds=reference['durationSeconds'],bonus_mode=cfg.get('bonus_mode','shared'))

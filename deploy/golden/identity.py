@@ -6,6 +6,11 @@ import os
 from pathlib import Path
 import secrets
 
+# Installer-facing application defaults. Infrastructure and Linux credentials
+# remain unique to each clone. The backend requires a new password on first login.
+DEFAULT_OWNER_PASSWORD = 'labrix'
+DEFAULT_ADMIN_PASSWORD = 'labrix'
+
 
 def initialize(root):
     root = Path(root)
@@ -22,8 +27,8 @@ def initialize(root):
         'POSTGRES_DB': 'sammoy2', 'POSTGRES_USER': 'sammoy2',
         'POSTGRES_PASSWORD': secrets.token_hex(32),
         'WASH_ENGINE_JWT_SECRET': secrets.token_hex(48),
-        'WASH_ENGINE_DEFAULT_OWNER_PASSWORD': secrets.token_urlsafe(18),
-        'WASH_ENGINE_DEFAULT_ADMIN_PASSWORD': secrets.token_urlsafe(18),
+        'WASH_ENGINE_DEFAULT_OWNER_PASSWORD': DEFAULT_OWNER_PASSWORD,
+        'WASH_ENGINE_DEFAULT_ADMIN_PASSWORD': DEFAULT_ADMIN_PASSWORD,
         'TELEGRAM_SETUP_KEY': secrets.token_hex(32),
         'REPORT_API_KEY': secrets.token_hex(32),
     }

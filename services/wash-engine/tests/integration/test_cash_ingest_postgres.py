@@ -135,3 +135,17 @@ class CashIngestTests(unittest.TestCase):
         self.assertEqual(rpc.call_args_list[0],rpc.call_args_list[1])
         self.assertEqual(rpc.call_args.args[0],f'nv9-recovery:{self.stream}:1:2')
         self.assertEqual(self.conn.execute('SELECT status FROM recovery_credits').fetchone()['status'],'claimed')
+
+    def test_dry_fog_nv9_stops_purge_before_durable_credit(self):
+        r=WashRuntime('dry_fog');r.params['billPulseSum']=1000
+        r.last_output='purge';r.state['purgeActive']=True;r._purge_until=9999999999
+        calls=[]
+        def off(output):
+            self.assertIsNone(output)
+            self.assertEqual(r.state['creditSum'],0)
+            self.assertEqual(self.count('payments'),0)
+            calls.append(output);r.last_output=None
+        r._apply_output_sync=off
+        self.capture(10,r)
+        self.assertEqual(calls,[None]);self.assertEqual(r.state['creditSum'],10000)
+        self.capture(10,r);self.assertEqual(self.count('payments'),1)

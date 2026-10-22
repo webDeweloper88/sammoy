@@ -1,0 +1,9 @@
+Window.SetBackgroundTopColor(0.027, 0.094, 0.141);
+Window.SetBackgroundBottomColor(0.027, 0.094, 0.141);
+logo.image = Image("labrix.png");
+logo.image = logo.image.Scale(180, 180);
+# ROTATION is substituted from the device display configuration at installation.
+logo.image = logo.image.Rotate(ROTATION);
+logo.sprite = Sprite(logo.image);
+logo.sprite.SetX(Window.GetX() + Window.GetWidth() / 2 - logo.image.GetWidth() / 2);
+logo.sprite.SetY(Window.GetY() + Window.GetHeight() / 2 - logo.image.GetHeight() / 2);

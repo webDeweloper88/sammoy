@@ -19,7 +19,7 @@ try{
   await r.fulfill({json:data})
  })
  for(theme of ['dark','light']){
-  s={...base};await p.goto(origin+'/wash');const panel=p.locator('.card-status-detail');await panel.locator('.card-status-dot').waitFor()
+  s={...base};await p.route('**/api/commissioning/state',r=>r.fulfill({json:{complete:true}}));await p.goto(origin+'/wash');const panel=p.locator('.card-status-detail');await panel.locator('.card-status-dot').waitFor()
   assert.equal(await panel.evaluate(e=>getComputedStyle(e).backgroundColor),'rgba(0, 0, 0, 0)')
   await panel.getByText('Ishlamoqda',{exact:true}).waitFor();assert((await p.locator('.status-scene').getAttribute('src')).endsWith('/foam.webp'));await p.waitForFunction(()=>document.querySelector('.status-scene')?.naturalWidth===1600);await p.screenshot({path:`../../docs/ui-status-scene-${theme}-active.png`})
   s={...base,phase:'trigger_wait',activeMode:null};await p.locator('.card-status-detail.state-waiting').waitFor();assert.equal(await panel.locator('.card-status-dot').count(),0);await panel.getByText('Pistolet tepkisini bosing',{exact:true}).waitFor()

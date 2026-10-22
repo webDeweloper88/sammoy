@@ -105,8 +105,8 @@ async def network_status(user:Admin):return await network_request('/status')
 @router.get('/network/wifi')
 async def network_wifi(user:Admin):return await network_request('/wifi')
 @router.post('/network/{action}')
-async def network_action(action:Literal['apply','confirm','rollback'],payload:dict,user:Admin):
-    if action=='apply':require_idle(wash_runtime)
+async def network_action(action:Literal['apply','confirm','rollback','temporary-disconnect'],payload:dict,user:Admin):
+    if action in ('apply','temporary-disconnect'):require_idle(wash_runtime)
     result=await network_request('/'+action,'POST',payload)
     audit(user,'admin_network_'+action,'Network '+action+' requested')
     return result
@@ -177,3 +177,32 @@ def test_credit(payload: TestCreditRequest, user: Admin):
             raw_payload={'test_credit':True,'reason':payload.reason,'changed_by':user['login'],'changed_by_user_id':user['id']},bonus_sum=0)
         audit(user,'admin_test_credit',f'Test credit {payload.amount_sum}; operation {payload.operation_id}; {payload.reason}')
         return {'ok':True,'already_applied':False,**result}
+
+
+@router.get('/service/bill-filter')
+def bill_filter_read(user:Admin):
+    from .admin_service import io_sync
+    with httpx.Client(timeout=4,trust_env=False) as client:
+        return io_sync(client,settings.io_helper_url,'/bill/filter')
+
+
+@router.post('/service/bill-filter')
+def bill_filter_save(value:dict,user:Admin):
+    from .admin_service import io_sync
+    with wash_runtime.lock:
+        require_idle(wash_runtime)
+        with httpx.Client(timeout=4,trust_env=False) as client:
+            result=io_sync(client,settings.io_helper_url,'/bill/filter',value)
+    audit(user,'admin_bill_filter_saved','Bill pulse validation settings saved')
+    return result
+
+
+@router.post('/service/bill-filter/reset')
+def bill_filter_reset(user:Admin):
+    from .admin_service import io_sync
+    with wash_runtime.lock:
+        require_idle(wash_runtime)
+        with httpx.Client(timeout=4,trust_env=False) as client:
+            result=io_sync(client,settings.io_helper_url,'/bill/filter/reset',{})
+    audit(user,'admin_bill_filter_reset','Bill input fault acknowledged after stable inactive signal')
+    return result

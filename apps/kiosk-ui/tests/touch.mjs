@@ -18,6 +18,8 @@ for (const [width,height] of [[1080,1920],[1920,1080]]) {
    if(path==='/api/auth/login') {
      const data=req.postDataJSON();assert.equal(data.login,'owner');assert.equal(data.password,'Ab1!');loginSeen=true;
      body={access_token:'test-token',user:{role:'owner',must_change_password:false}};
+   } else if(path==='/api/owner/site/overview'){
+     body={ok:true,complete:true,summary:{},posts:[],modes:[],timeline:[],online_posts:0,manage_allowed:true};
    } else if(path==='/api/owner/wash/parameters'){
      if(req.method()==='POST')saved=req.postDataJSON().parameters;
      body={ok:true,parameters:saved||live.parameters};
@@ -37,7 +39,9 @@ for (const [width,height] of [[1080,1920],[1920,1080]]) {
  // Reopening the same field after Done must work.
  await page.getByLabel('Пароль',{exact:true}).tap();await keyboard.waitFor();await key('Готово ✓').tap();
  await page.getByRole('button',{name:'Войти',exact:true}).tap();
- await page.waitForURL('**/owner/parameters');assert(loginSeen);
+ await page.waitForURL('**/owner/site');assert(loginSeen);
+ await page.getByRole('navigation').getByRole('button',{name:'Параметры',exact:true}).tap();
+ await page.waitForURL('**/owner/parameters');
  const input=page.getByLabel('Подтверждение отпущенного курка, сек');
  await input.tap();await key('Очистить').tap();await key('0').tap();await key('.').tap();await key('8').tap();
  assert.equal(await input.inputValue(),'0.8');
@@ -64,6 +68,7 @@ await page.route('**/api/**',async route=>{
   body={access_token:'new-token',user:{role:'admin',must_change_password:false}};
  }else if(path==='/api/owner/wash/parameters')body={ok:true,parameters:live.parameters};
  else if(path==='/api/admin/diagnostics')body={state:{creditSum:0},simulation:{},parameters:{billPulseSum:1000},system:{disk_free_bytes:1},io:{available:false},configuration:{available:false},rfid:{available:false}};
+ else if(path==='/api/admin/service/bill-filter')body={ready:true,settings:{},statistics:{},samples:[]};
  else throw Error('Unexpected API call '+path);
  await route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
 });

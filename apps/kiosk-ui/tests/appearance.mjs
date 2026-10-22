@@ -23,7 +23,7 @@ try{
   const data=path==='/api/wash/state'?{ok:true,state:{phase:'idle',creditSum:25000,selectedMode:'pause',pauseState:'none',lastIoOk:true,runtimeAgeSeconds:0,lastRfidStatus:'online',internetOnline:true},parameters:{tariffs:Object.fromEntries(names.map(id=>[id,{enabled:true}]))}}:path==='/api/kiosk/settings'?{ok:true,config}:{ok:true,click:{enabled:true,minAmount:1000,maxAmount:100000}}
   await route.fulfill({contentType:'application/json',body:JSON.stringify(data)})
  })
- await page.goto(origin+'/wash');await page.locator('.wash-kiosk[data-theme=light]').waitFor()
+ await page.route('**/api/commissioning/state',r=>r.fulfill({json:{complete:true}}));await page.goto(origin+'/wash');await page.locator('.wash-kiosk[data-theme=light]').waitFor()
  assert(await page.evaluate(()=>document.documentElement.scrollHeight===innerHeight&&document.documentElement.scrollWidth===innerWidth))
  await page.screenshot({path:'../../docs/ui-wash-light-1080x1920.png'})
  await page.locator('.wash-topup').tap();await page.locator('.payment-dialog[open]').waitFor()

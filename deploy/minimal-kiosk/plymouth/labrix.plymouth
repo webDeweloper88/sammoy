@@ -1,0 +1,7 @@
+[Plymouth Theme]
+Name=LABRIX
+Description=LABRIX appliance startup
+ModuleName=script
+[script]
+ImageDir=/usr/share/plymouth/themes/labrix
+ScriptFile=/usr/share/plymouth/themes/labrix/labrix.script

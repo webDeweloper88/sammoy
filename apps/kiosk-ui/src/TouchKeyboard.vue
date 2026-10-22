@@ -7,7 +7,8 @@ const upper = ref(false)
 const symbols = ref(false)
 const alphabet = ref('en')
 const inputType = ref('')
-const numeric = computed(() => inputType.value === 'number')
+const integer = computed(() => input.value?.dataset.keyboard === 'integer')
+const numeric = computed(() => inputType.value === 'number' || integer.value)
 const words = {
   ru: { title: 'Экранная клавиатура', close: 'Готово', erase: 'Стереть', clear: 'Очистить', space: 'Пробел', next: 'Далее' },
   uz: { title: 'Ekran klaviaturasi', close: 'Tayyor', erase: 'O‘chirish', clear: 'Tozalash', space: 'Bo‘sh joy', next: 'Keyingi' },
@@ -15,7 +16,7 @@ const words = {
 }
 const t = key => (words[props.language] || words.ru)[key]
 const rows = computed(() => {
-  if (numeric.value) return [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], ['.', '0']]
+  if (numeric.value) return [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], integer.value?['0']:['.', '0']]
   if (symbols.value) return ['1234567890', '!@#$%^&*()', '-_=+[]{}\\|', ';:\'",.<>/?`~'].map(row => [...row])
   const letters = alphabet.value === 'ru'
     ? ['1234567890', 'йцукенгшщзхъ', 'фывапролджэ', 'ячсмитьбюё']
@@ -67,7 +68,7 @@ function edit(key) {
   if (key === 'clear') {
     next = ''; position = 0
   } else if (key === 'backspace') {
-    const from = start === end ? Math.max(0, start - 1) : start
+    const from = start === end ? Math.max(0, start - (target.dataset.format==='activation-code' && value[start-1]==='-'?2:1)) : start
     next = value.slice(0, from) + value.slice(end); position = from
   } else {
     next = value.slice(0, start) + key + value.slice(end); position = start + key.length
@@ -78,7 +79,7 @@ function edit(key) {
   target.value = next
   target.dispatchEvent(new Event('input', { bubbles: true }))
   target.focus({ preventScroll: true })
-  if (target.type !== 'number') target.setSelectionRange(position, position)
+  if (target.type !== 'number' && target.value === next) target.setSelectionRange(position, position)
 }
 
 function nextField() {

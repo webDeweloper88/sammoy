@@ -27,6 +27,9 @@ def capture(runtime,io,*,recover=False):
             previous=int(row['setting_value']['total']) if row else 0
             if total<previous:raise RuntimeError('NV9 journal counter moved backwards')
             delta=total-previous
+            if delta or getattr(runtime, "_nv9_pending", None):
+                from .dry_fog_purge import cancel
+                cancel(runtime)
             pending=getattr(runtime,'_nv9_pending',None)
             if pending and pending[0]==stream and previous>=pending[1] and row:
                 accepted=row['setting_value']

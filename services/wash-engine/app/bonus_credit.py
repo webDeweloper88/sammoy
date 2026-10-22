@@ -5,6 +5,8 @@ from .db import db
 from .bonus import award,remaining,restore
 
 def accept(runtime,amount,key,raw,bonus_override=None):
+    from .dry_fog_purge import cancel
+    cancel(runtime)
     if type(amount) is not int or amount<=0:raise ValueError('Positive payment required')
     bonus=award(amount,runtime.params) if bonus_override is None else bonus_override
     if type(bonus) is not int or bonus<0:raise ValueError('Invalid payment bonus')

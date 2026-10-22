@@ -30,7 +30,7 @@ const lastAppearance=ref(null)
 let initialLanguageApplied=false
 watch(config,c=>{if(c&&!initialLanguageApplied){language.value=defaultLanguage(c);initialLanguageApplied=true}},{immediate:true})
 watch(config,c=>{if(c?.theme?.appearance)lastAppearance.value=c.theme.appearance},{immediate:true})
-const design=computed(()=>config.value?.theme?.design==='cards'?'cards':'wheel')
+const design=computed(()=>config.value?.theme?.design==='wheel'?'wheel':'cards')
 const appearance=computed(()=>resolveAppearance(lastAppearance.value,new Date(now.value)))
 const dryFog=computed(()=>props.preview?props.previewKind==='dry_fog':state.value?.deviceType==='dry_fog')
 const idleBlocked=computed(()=>paymentOpen.value||paymentPending.value||socialOpen.value||props.preview||dryFog.value)
@@ -50,6 +50,7 @@ const statusText=computed(()=>{
  if(s?.walletTransferPending)return s.walletOperationInProgress ? t.value.walletProcessing : t.value.walletPending
  if(!ready.value)return t.value.hardware
  if(error.value)return t.value.failed
+ if(s?.purgeActive)return t.value.purgeRunning
  if(s?.walletCashHeld>0)return t.value.cashHeld+' · '+Number(s.walletCashHeld).toLocaleString('ru-RU')+' so‘m'
  if(s?.lastRfidProcessedAt&&now.value-Date.parse(s.lastRfidProcessedAt)>=0&&now.value-Date.parse(s.lastRfidProcessedAt)<8000){
   const result=s.lastRfidResult
@@ -131,7 +132,7 @@ watch(idleVisible, v=>{if(v)language.value=defaultLanguage(config.value)})
  <IdleScreen v-if="idleVisible" :config="config" v-model:language="language" @wake="wake"/>
  <main v-else :aria-busy="busy" class="wash-screen" :class="{'without-optional':!optionalPrograms.length,'cards-design':design==='cards','dry-fog-design':dryFog}" :lang="{uz:'uz',kz:'kk',ky:'ky',ru:'ru'}[language]">
   <header class="wash-topbar">
-   <div class="wash-brand" role="button" tabindex="0" :aria-label="t.admin" @pointerdown="startLoginHold" @pointerup="cancelLoginHold" @pointercancel="cancelLoginHold" @pointerleave="cancelLoginHold" @pointermove="moveLoginHold" @contextmenu.prevent @keydown.enter.prevent="startLoginHold" @keyup.enter="cancelLoginHold" @blur="cancelLoginHold"><img v-if="design==='cards' && brandTitle(config).toUpperCase()==='LABRIX WASH'" class="theme2-brand-mark" src="/assets/theme2/brand/labrix_mark_L.png" alt=""/><img v-else-if="config?.brand?.logoUrl" class="wash-owner-logo" :src="config.brand.logoUrl" alt=""/><img v-else-if="design==='cards'" class="theme2-brand-mark" src="/assets/theme2/brand/labrix_mark_L.png" alt=""/><WashIcon v-else name="water"/><div><strong v-if="brandTitle(config)==='LABRIX WASH'">LABRIX <span>WASH</span></strong><strong v-else class="custom-brand">{{brandTitle(config)}}</strong><small>{{ brandSubtitle(config,t.descriptor) }}</small></div></div>
+   <div class="wash-brand" role="button" tabindex="0" :aria-label="t.admin" @pointerdown="startLoginHold" @pointerup="cancelLoginHold" @pointercancel="cancelLoginHold" @pointerleave="cancelLoginHold" @pointermove="moveLoginHold" @contextmenu.prevent @keydown.enter.prevent="startLoginHold" @keyup.enter="cancelLoginHold" @blur="cancelLoginHold"><img v-if="config?.brand?.logoUrl" class="wash-owner-logo" :src="config.brand.logoUrl" alt=""/><img v-else class="theme2-brand-mark" src="/assets/theme2/brand/labrix_mark_L.png" alt=""/><div><strong v-if="brandTitle(config)==='LABRIX WASH'">LABRIX <span>WASH</span></strong><strong v-else class="custom-brand">{{brandTitle(config)}}</strong><small>{{ brandSubtitle(config,t.descriptor) }}</small></div></div>
    <nav v-if="config?.layout?.showLanguageButtons!==false" aria-label="Language"><button v-for="lang in ['ru','uz','kz','ky']" :key="lang" :aria-label="languageNames[lang]" :aria-pressed="language===lang" :class="{active:language===lang}" @click="language=lang">{{ lang.toUpperCase() }}</button></nav>
   </header>
   <section class="wash-status" :style="design==='wheel'?{'--status-tone':wheelStatusTone,'--status-ink':wheelStatusInk}:undefined" :class="{'wheel-status':design==='wheel','time-primary':timePrimary,'pause-free':pauseVisual==='free','pause-paid':pauseVisual==='paid','pause-stopped':pauseVisual==='stopped'}" :aria-label="t.balance+' / '+t.time">
@@ -165,12 +166,12 @@ watch(idleVisible, v=>{if(v)language.value=defaultLanguage(config.value)})
  </div>
 </template>
 
-<style scoped>.preview-tools{position:fixed;top:8px;left:8px;z-index:50;background:#152733;color:white;border:1px solid #8eb5cb;border-radius:8px;font-family:Arial,sans-serif;font-size:16px;padding:10px;max-width:340px;box-shadow:0 3px 12px #0005}.preview-tools summary{cursor:pointer;font-weight:bold;min-height:32px}.preview-tools label{display:flex;gap:12px;align-items:center;justify-content:space-between;margin:12px 0}.preview-tools select,.preview-tools button{font-size:16px;padding:12px;border-radius:6px;border:1px solid #8eb5cb;background:#fff;color:#152733}.preview-tools p{font-size:14px}.preview-tools input{width:24px;height:24px}.status-primary.has-bonus .status-value strong{font-size:calc(104 * var(--u))}
+<style scoped>.theme2-brand-mark{width:calc(82 * var(--u));height:calc(90 * var(--u));object-fit:contain;flex:none}.preview-tools{position:fixed;top:8px;left:8px;z-index:50;background:#152733;color:white;border:1px solid #8eb5cb;border-radius:8px;font-family:Arial,sans-serif;font-size:16px;padding:10px;max-width:340px;box-shadow:0 3px 12px #0005}.preview-tools summary{cursor:pointer;font-weight:bold;min-height:32px}.preview-tools label{display:flex;gap:12px;align-items:center;justify-content:space-between;margin:12px 0}.preview-tools select,.preview-tools button{font-size:16px;padding:12px;border-radius:6px;border:1px solid #8eb5cb;background:#fff;color:#152733}.preview-tools p{font-size:14px}.preview-tools input{width:24px;height:24px}.status-primary.has-bonus .status-value strong{font-size:calc(104 * var(--u))}
 </style>
 
-<style scoped>
+<style scoped>.theme2-brand-mark{width:calc(82 * var(--u));height:calc(90 * var(--u));object-fit:contain;flex:none}
 .bonus-caption{margin:0;text-align:center;font-size:calc(20 * var(--u));line-height:1.15;color:var(--wash-muted)}
 .status-primary.has-bonus .status-value strong{font-size:calc(104 * var(--u))}
 </style>
 
-<style scoped>.wash-owner-logo{width:calc(70 * var(--u));height:calc(76 * var(--u));object-fit:contain}.wash-brand strong.custom-brand{white-space:normal;font-size:calc(38 * var(--u));max-width:calc(560 * var(--u));overflow-wrap:anywhere;line-height:1.1}</style>
+<style scoped>.theme2-brand-mark{width:calc(82 * var(--u));height:calc(90 * var(--u));object-fit:contain;flex:none}.wash-owner-logo{width:calc(70 * var(--u));height:calc(76 * var(--u));object-fit:contain}.wash-brand strong.custom-brand{white-space:normal;font-size:calc(38 * var(--u));max-width:calc(560 * var(--u));overflow-wrap:anywhere;line-height:1.1}</style>

@@ -16,7 +16,7 @@ try{
   await route.fulfill({contentType:'application/json',body:JSON.stringify(data)})
  })
  for(theme of ['light','dark'])for(const count of [6,5,4,3,2,1]){
-  visible=[...ids.slice(0,6).filter(id=>id!=='foam').slice(0,count),...(count===6?['foam']:[]),'air'];await page.goto(origin+'/wash')
+  visible=[...ids.slice(0,6).filter(id=>id!=='foam').slice(0,count),...(count===6?['foam']:[]),'air'];await page.route('**/api/commissioning/state',r=>r.fulfill({json:{complete:true}}));await page.goto(origin+'/wash')
   await page.locator(`.wash-kiosk[data-theme=${theme}]`).waitFor();await page.locator('.wash-topup strong').getByText('Yuvishga tayyormisiz?',{exact:true}).waitFor()
   const cards=page.locator('.program-card');assert.equal(await cards.count(),count);assert.equal(await page.locator('.wash-start-guide,.card-idle-guidance,.card-pause').count(),0)
   const grid=await page.locator('.program-card-grid').boundingBox(),last=await cards.last().boundingBox();assert(Math.abs(last.y+last.height-(grid.y+grid.height))<3)

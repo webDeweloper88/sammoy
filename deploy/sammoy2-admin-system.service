@@ -1,0 +1,22 @@
+[Unit]
+Description=LABRIX local system maintenance
+After=docker.service
+Requires=docker.service
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/sammoy/sammoy2/deploy/admin-system-agent.py
+RuntimeDirectory=sammoy2-admin
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+StateDirectory=sammoy2-admin
+StateDirectoryMode=0700
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/run/sammoy2-admin /var/lib/sammoy2-admin /opt/sammoy/sammoy2
+
+[Install]
+WantedBy=multi-user.target

@@ -34,6 +34,9 @@ def settings_write(section,payload,actor):
     value=payload.get('value');expected=payload.get('expected_revision')
     if not isinstance(value,dict) or not isinstance(expected,str):raise HTTPException(422,'Value and revision required')
     with wash_runtime.lock:
+        if section == "parameters":
+            from .dry_fog_purge import cancel
+            cancel(wash_runtime)
         require_idle(wash_runtime)
         current=settings_read(section)
         if current['revision']!=expected:raise HTTPException(409,'Settings changed; reload before saving')

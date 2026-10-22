@@ -1,5 +1,6 @@
 """One durable monotonic NV9 stream. A pulse is published only after commit."""
 import sqlite3
+import json
 import threading
 from pathlib import Path
 from uuid import uuid4
@@ -12,6 +13,7 @@ class PulseJournal:
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.execute('PRAGMA synchronous=FULL')
         self.conn.execute('CREATE TABLE IF NOT EXISTS counter(id INTEGER PRIMARY KEY CHECK(id=1),stream TEXT NOT NULL,total INTEGER NOT NULL CHECK(total>=0))')
+        self.conn.execute('CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL)')
         self.conn.execute('INSERT OR IGNORE INTO counter VALUES(1,?,0)',(uuid4().hex,))
         self.conn.commit()
         row=self.conn.execute('SELECT stream,total FROM counter WHERE id=1').fetchone()
@@ -30,3 +32,16 @@ class PulseJournal:
         with self.lock:return self.total
     def close(self):
         with self.lock:self.conn.close()
+
+    def get_setting(self,key,default=None):
+        with self.lock:
+            row=self.conn.execute('SELECT value FROM settings WHERE key=?',(key,)).fetchone()
+            return json.loads(row[0]) if row else default
+
+    def set_setting(self,key,value):
+        with self.lock:
+            try:
+                self.conn.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',(key,json.dumps(value,allow_nan=False)))
+                self.conn.commit()
+            except BaseException:
+                self.conn.rollback();raise

@@ -1,3 +1,4 @@
+import {maintenanceActive} from './maintenance-state.js'
 export async function api(path, { token, ...options } = {}) {
   const response = await fetch(path, {
     signal: AbortSignal.timeout(60000),
@@ -13,7 +14,7 @@ export async function api(path, { token, ...options } = {}) {
     const detail = data.detail
     const error = new Error(typeof detail === 'string' ? detail : Array.isArray(detail) ? detail.map(item => item.msg).join('; ') : `HTTP ${response.status}`)
     error.status = response.status
-    if(response.status === 401 && token && path !== '/api/auth/logout') window.dispatchEvent(new Event('sammoy-session-expired'))
+    if(response.status === 401 && token && path !== '/api/auth/logout' && !maintenanceActive.value) window.dispatchEvent(new Event('sammoy-session-expired'))
     throw error
   }
   return data

@@ -1988,6 +1988,18 @@ async def upload_kiosk_asset(
     }
 
 
+def require_customer_setup():
+    if not get_commissioning_state().get('complete'):
+        raise HTTPException(409,'Завершите настройку поста через /install')
+
+
+@app.get('/api/kiosk/access',response_class=Response)
+def customer_screen_access():
+    if not get_commissioning_state().get('complete'):
+        raise HTTPException(403,'Station setup is not complete')
+    return Response(status_code=204,headers={'Cache-Control':'no-store'})
+
+
 @app.get("/api/wash/state")
 def wash_state() -> dict[str, object]:
     payload = wash_runtime.snapshot()
@@ -1997,6 +2009,7 @@ def wash_state() -> dict[str, object]:
 
 @app.post("/api/wash/mode")
 def wash_select_mode(payload: WashModeRequest) -> dict[str, object]:
+    if payload.mode!='pause':require_customer_setup()
     try:
         return wash_runtime.select_mode(payload.mode)
     except ValueError as exc:
@@ -2909,6 +2922,12 @@ async def commissioning_complete(payload: CommissioningCompleteRequest) -> dict[
     from .device_setup import local_status
     device=local_status()
     if device["active_type"]!=device["requested"]["type"]:raise HTTPException(409,"Примените профиль оборудования перед завершением установки")
+    cleanup={'scheduled':False}
+    if payload.disconnect_temporary_wifi:
+        from .admin_api import network_request
+        # Delayed cleanup lets the HTTP response reach a hotspot-connected
+        # installer. The host owns the timer even after commissioning closes.
+        cleanup=await network_request('/temporary-finish','POST',{})
     completed_at = datetime.now(UTC).isoformat()
     with db() as conn:
         conn.execute(
@@ -2928,7 +2947,7 @@ async def commissioning_complete(payload: CommissioningCompleteRequest) -> dict[
             (Jsonb({"site_code": config["site_code"], "post_no": config["post_no"]}),),
         )
         conn.commit()
-    return await commissioning_status()
+    return {**(await commissioning_status()),'temporary_wifi_cleanup':cleanup}
 
 
 @app.post("/api/admin/install/apply")
@@ -3096,6 +3115,7 @@ def admin_save_license_settings(
 
 @app.post("/api/click/intents")
 async def create_click_intent(payload: ClickIntentRequest) -> dict[str, object]:
+    require_customer_setup()
     license_status = apply_license_to_runtime()
     if license_status.get("locked"):
         raise HTTPException(status.HTTP_423_LOCKED, f"License locked: {license_status.get('reason')}")
@@ -3920,6 +3940,8 @@ async def owner_station_reports(
 
 from .admin_api import router as admin_router
 app.include_router(admin_router)
+from .system_api import router as system_router
+app.include_router(system_router)
 from .owner_site import router as owner_site_router
 app.include_router(owner_site_router)
 
@@ -3935,10 +3957,21 @@ def commissioning_wallet_status():
     from .wallet_api import owner_status
     return owner_status({'login':'installer'})
 
+@app.get('/api/commissioning/wallet/availability',dependencies=[Depends(commissioning_access)])
+def commissioning_wallet_availability():
+    from .wallet_api import owner_availability
+    return owner_availability({'login':'installer'})
+
+
 @app.post('/api/commissioning/wallet',dependencies=[Depends(commissioning_access)])
 def commissioning_wallet_setup(payload:WalletSetupRequest):
     from .wallet_api import setup
     return setup(payload,{'login':'installer'})
+
+@app.post('/api/commissioning/wallet/synchronize',dependencies=[Depends(commissioning_access)])
+def commissioning_wallet_synchronize():
+    from .wallet_api import synchronize
+    return synchronize({'login':'installer'})
 
 
 @app.get('/api/commissioning/network/{kind}',dependencies=[Depends(commissioning_access)])
@@ -3951,12 +3984,25 @@ async def commissioning_network_read(kind: str):
 
 @app.post('/api/commissioning/network/{action}',dependencies=[Depends(commissioning_access)])
 async def commissioning_network_action(action:str,payload:dict):
-    if get_commissioning_state().get('complete') or action not in ('apply','confirm','rollback'):
+    if get_commissioning_state().get('complete') or action not in ('apply','confirm','rollback','temporary-connect','temporary-disconnect'):
         raise HTTPException(403,'Network commissioning is closed')
     from .admin_api import network_request
     from .admin_service import require_idle
-    if action=='apply':require_idle(wash_runtime)
+    if action in ('apply','temporary-connect','temporary-disconnect'):require_idle(wash_runtime)
     return await network_request('/'+action,'POST',payload)
+
+@app.get('/api/commissioning/internet',dependencies=[Depends(commissioning_access)])
+async def commissioning_internet():
+    if get_commissioning_state().get('complete'):raise HTTPException(403,'Network commissioning is closed')
+    gateway=str(get_license_settings().get('gateway_url') or 'https://pay.labrix.uz').strip().rstrip('/')
+    if 'example.com' in gateway:gateway='https://pay.labrix.uz'
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(4,connect=3),follow_redirects=True) as client:
+            response=await client.get(gateway.rstrip('/')+'/health')
+            response.raise_for_status()
+        return {'ok':True,'reachable':True}
+    except (httpx.HTTPError,ValueError):
+        return {'ok':True,'reachable':False}
 
 
 @app.get('/api/commissioning/telegram/status', dependencies=[Depends(commissioning_access)])
@@ -4004,6 +4050,8 @@ def device_profile_catalog():
 
 from .device_setup import router as device_router,LocalDevice,DevicePolicy,local_status,request_local
 app.include_router(device_router)
+from .wallet_management import router as wallet_management_router
+app.include_router(wallet_management_router)
 
 @app.get('/api/commissioning/device',dependencies=[Depends(commissioning_access)])
 def commissioning_device_read():return local_status()
@@ -4013,6 +4061,12 @@ def commissioning_device_write(payload:LocalDevice):
     from .wallet_domain import WalletConflict
     try:return request_local(payload)
     except WalletConflict as exc:raise HTTPException(409,str(exc)) from None
+
+from .system_api import HardwareRequest, request_hardware_apply
+
+@app.post('/api/commissioning/hardware', dependencies=[Depends(commissioning_access)])
+def commissioning_hardware_apply(payload: HardwareRequest):
+    return request_hardware_apply(payload, get_commissioning_state())
 
 @app.get('/api/commissioning/device-policy',dependencies=[Depends(commissioning_access)])
 def commissioning_device_policy_read():
@@ -4027,3 +4081,6 @@ def commissioning_device_policy_write(payload:DevicePolicy):
 # Stop runtime/background workers before closing their reusable transports.
 from .http_pool import close_all as close_sync_http_clients
 app.add_event_handler("shutdown", close_sync_http_clients)
+
+from .telegram_mobile import router as telegram_mobile_router
+app.include_router(telegram_mobile_router)

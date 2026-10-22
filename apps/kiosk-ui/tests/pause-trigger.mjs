@@ -17,7 +17,7 @@ try{
   await route.fulfill({contentType:'application/json',body:JSON.stringify(data)})
  })
  for(theme of ['light','dark']){
-  held=true;await page.goto(origin+'/wash');await page.locator(`.wash-kiosk[data-theme=${theme}]`).waitFor()
+  held=true;await page.route('**/api/commissioning/state',r=>r.fulfill({json:{complete:true}}));await page.goto(origin+'/wash');await page.locator(`.wash-kiosk[data-theme=${theme}]`).waitFor()
   const button=page.locator('.card-pause');await button.getByText('Avval pistolet tepkisini qo‘yib yuboring',{exact:true}).waitFor();assert(await button.isDisabled())
   const style=await button.evaluate(el=>({opacity:getComputedStyle(el).opacity,color:getComputedStyle(el).color,background:getComputedStyle(el).backgroundColor,small:getComputedStyle(el.querySelector('small')).color}))
   assert.equal(style.opacity,'1');assert.equal(style.small,style.color);assert.equal(style.color,theme==='light'?'rgb(41, 70, 93)':'rgb(212, 226, 238)')

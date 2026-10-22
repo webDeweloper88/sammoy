@@ -16,6 +16,6 @@ def main():
     subprocess.run(['journalctl',f'--vacuum-time={age}s','--vacuum-size=256M'],check=True)
     # Only unused build cache older than the same calendar month; no images,
     # containers, database volumes, uploads, or financial backups are removed.
-    subprocess.run(['docker','builder','prune','--force','--filter',f'until={age}s'],check=True)
+    subprocess.run(['/usr/bin/python3','/opt/sammoy/sammoy2/deploy/storage-maintenance.py'],check=True)
 
 if __name__=='__main__':main()

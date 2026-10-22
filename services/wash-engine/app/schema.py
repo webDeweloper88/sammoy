@@ -146,6 +146,7 @@ class CommissioningOfflineRequest(BaseModel):
 
 class CommissioningCompleteRequest(BaseModel):
     confirmation: str = Field(pattern="^READY$")
+    disconnect_temporary_wifi: bool = False
 
 
 from pydantic import ConfigDict

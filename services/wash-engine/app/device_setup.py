@@ -66,8 +66,14 @@ def request_local(value):
 def read_policy(user:Owner):
     from .wallet_client import discover_configuration
     from .wallet_api import rpc
-    cfg=discover_configuration()
-    return rpc(cfg,cfg['primary_post'],'device-policy-read',{})
+    try:
+        cfg=discover_configuration()
+        result=rpc(cfg,cfg['primary_post'],'device-policy-read',{})
+        # The policy belongs to the primary, but the page belongs to THIS node.
+        # Returning the primary's local_post enabled editing on the standby.
+        return {**result,'configuration':{k:cfg[k] for k in ('primary_post','local_post','peer_urls')}}
+    except (WalletUnavailable,WalletConflict) as exc:
+        raise HTTPException(503,str(exc)) from None
 
 
 @router.post('/owner/device-policy')
@@ -75,8 +81,11 @@ def save_policy(value:DevicePolicy,user:Owner):
     from .wallet_api import configuration,authority,control_lock,store_context,coordinator
     from .wallet_client import require_device_wallet_support
     from .wash_logic import wash_runtime
-    cfg=configuration();authority(cfg).require_primary()
+    cfg=configuration()
+    if cfg['local_post']!=cfg['primary_post']:
+        raise HTTPException(409,f"Общие правила изменяются на главном посту №{cfg['primary_post']}")
     try:
+        authority(cfg).require_primary()
         require_idle(wash_runtime)
         if any(not k.isdigit() or str(int(k))!=k or not 1<=int(k)<=100 for k in value.device_types):raise WalletConflict('Некорректные номера устройств')
         if not set(cfg['peer_urls']).issubset(value.device_types):raise WalletConflict('Укажите тип каждого зарегистрированного поста')
@@ -96,7 +105,6 @@ def save_policy(value:DevicePolicy,user:Owner):
 def startup_guard(runtime):
     from .config import settings
     from .wallet_api import configuration
-    from .wallet_client import require_device_wallet_support
     if settings.device_type!=runtime.device_type:
         raise RuntimeError('Dry fog requires a commissioned hardware profile and wallet migration')
     cfg=configuration()
@@ -105,9 +113,11 @@ def startup_guard(runtime):
         cfg=discover_configuration()
     if not cfg.get('device_wallet_enabled') or cfg.get('device_types',{}).get(str(cfg['local_post']))!=runtime.device_type:
         raise RuntimeError('Dry fog device inventory and wallet migration are not commissioned')
-    if local_status()['requested']['type']!=runtime.device_type:
-        raise RuntimeError('Installer must select the dry-fog type first')
-    require_device_wallet_support(cfg,local_capability=True)
+    # A requested future type is not an applied hardware profile. Keep serving
+    # the commissioned active type until the installer switches its I/O map.
+    # The persisted local inventory authorizes this hardware profile. A reset
+    # or offline standby must not prevent the API and local services booting.
+    # Typed financial commands still check both peers before journal writes.
 
 
 def apply_award(runtime,cfg):

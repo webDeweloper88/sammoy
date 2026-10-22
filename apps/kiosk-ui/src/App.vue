@@ -6,6 +6,8 @@ import OwnerPages from './OwnerPages.vue'
 import SiteOwner from './SiteOwner.vue'
 import WalletSettings from './WalletSettings.vue'
 import AdminPages from './AdminPages.vue'
+import PurgeSettings from './PurgeSettings.vue'
+import SystemControls from './SystemControls.vue'
 const theme = ref(localStorage.getItem('sammoy-ui-theme') === 'dark' ? 'dark' : 'light')
 function applyTheme() { document.documentElement.dataset.theme = theme.value; localStorage.setItem('sammoy-ui-theme', theme.value) }
 function toggleTheme() { theme.value = theme.value === 'light' ? 'dark' : 'light'; applyTheme() }
@@ -26,6 +28,7 @@ function navigate(value, force = false) {
   if (!force && (dirty.value || pageDirty.value)) { pendingPage.value = value; return }
   pageDirty.value = false; dirty.value = false; pendingPage.value = '';
   if(value === 'logout') { signOut(); return }
+  if(value === 'station') { returnToStation(); return }
   page.value = value
   window.history.pushState(null, '', routeFor(value))
   if (value === 'parameters') load()
@@ -91,6 +94,7 @@ const dirty = ref(false)
 
 function updateAccount(value) { account.value=value.user; token.value=value.access_token; sessionStorage.setItem('sammoy-owner-token',token.value) }
 
+async function returnToStation(){ await signOut(); window.location.assign('/wash') }
 function openInstall() { window.location.assign('/install') }
 
 function setLanguage(value) {
@@ -173,7 +177,7 @@ async function signOut() {
   sessionStorage.removeItem('sammoy-owner-token')
   window.history.replaceState(null, '', '/login')
   nextTick(() => loginInput.value?.focus())
-  if(oldToken) { try { await api('/api/auth/logout',{token:oldToken,method:'POST'}) } catch {} }
+  if(oldToken) { try { await api('/api/auth/logout',{token:oldToken,method:'POST',signal:AbortSignal.timeout(3000)}) } catch {} }
 }
 
 window.addEventListener('sammoy-session-expired', () => { signOut(); error.value = language.value === 'ru' ? 'Сеанс истёк. Войдите снова.' : 'Session expired. Sign in again.' })
@@ -239,7 +243,7 @@ onMounted(async () => {
   <main class="shell" :class="{ 'access-shell': !token || passwordChangeRequired }">
     <header class="topbar">
       <div class="brand"><strong>Labrixwash</strong><span>{{ t('console') }}</span></div>
-      <div class="top-actions"><button class="quiet" @click="toggleTheme" :aria-label="language === 'ru' ? 'Сменить тему' : 'Change theme'">{{ theme === 'light' ? '◐ Dark' : '☀ Light' }}</button>
+      <div class="top-actions"><button class="quiet station-home" @click="navigate('station')">{{language==='uz'?'Post ekraniga':language==='en'?'Station screen':'К экрану поста'}}</button><button class="quiet" @click="toggleTheme" :aria-label="language === 'ru' ? 'Сменить тему' : 'Change theme'">{{ theme === 'light' ? '◐ Dark' : '☀ Light' }}</button>
         <div class="language" aria-label="Language"><button v-for="item in ['ru', 'uz', 'en']" :key="item" :class="{ active: language === item }" @click="setLanguage(item)">{{ item.toUpperCase() }}</button></div>
         <button v-if="token" class="quiet" @click="navigate('logout')">{{ t('logout') }}</button>
       </div>
@@ -258,6 +262,7 @@ onMounted(async () => {
       <label>{{ t('password') }}<input v-model="credentials.password" :type="showPasswords ? 'text' : 'password'" autocomplete="current-password" maxlength="200" required /></label>
       <label class="show-password"><input v-model="showPasswords" type="checkbox" />{{ t('show') }}</label>
       <button class="primary" :disabled="loading">{{ loading ? t('loading') : t('enter') }}</button><button type="button" class="quiet" @click="openInstall">{{ language === 'ru' ? 'Установка поста' : language === 'uz' ? 'Postni sozlash' : 'Station setup' }}</button>
+      <SystemControls :language="language" :initial-login="credentials.login" />
     </form>
 
     <form v-else-if="passwordChangeRequired" class="login card" @submit.prevent="updatePassword">
@@ -277,6 +282,7 @@ onMounted(async () => {
     <template v-else-if="parameters">
       <div class="toolbar"><p :class="{ 'unsaved': dirty }">{{ t(dirty ? 'unsaved' : 'noChange') }}</p><div><button class="quiet" :disabled="loading || saving" @click="navigate('parameters')">{{ t('refresh') }}</button><button class="primary" :disabled="!valid || !dirty || saving" @click="save">{{ saving ? t('saving') : t('save') }}</button></div></div>
       <form @submit.prevent="save" @input="markDirty" @change="markDirty">
+        <section v-if="parameters.purge&&parameters.tariffs.aroma_1" class="card content"><PurgeSettings v-model="parameters.purge" :language="language"/></section>
         <section class="card"><div class="card-head"><h2>{{ language==='ru'?'Бонус за пополнение':language==='uz'?'Balans to‘ldirish bonusi':'Top-up bonus' }}</h2></div><p v-if="parameters.bonusDomain" class="content">{{ language==='ru'?'Общая бонусная политика задаётся в разделе «Кошелёк → Мойка и сухой туман».':language==='uz'?'Umumiy bonus qoidalari «Hamyon → Yuvish va quruq tuman» bo‘limida sozlanadi.':'Shared bonus policy is configured under Wallet → Wash and dry fog.' }}</p><div class="content fields" v-else-if="parameters.topUpBonus"><label class="show-password"><input v-model="parameters.topUpBonus.enabled" type="checkbox"/>{{ language==='ru'?'Начислять бонус':language==='uz'?'Bonus hisoblash':'Award bonus' }}</label><label>{{ language==='ru'?'Бонус, %':language==='uz'?'Bonus, %':'Bonus, %' }}<input v-model.number="parameters.topUpBonus.percent" type="number" min="0" max="100" step="1" required/></label><p>{{ language==='ru'?'Только новые пополнения наличными и Click на этом посту. Перенос на карту не начисляет бонус повторно. Сначала расходуется бонус.':language==='uz'?'Faqat ushbu postdagi yangi naqd va Click to‘lovlari uchun. Kartaga ko‘chirishda bonus qayta hisoblanmaydi. Avval bonus sarflanadi.':'Only new cash and Click top-ups at this station. Card transfers never award another bonus. Bonus is spent first.' }}</p><p v-if="parameters.topUpBonus.enabled">50 000 + {{ (50000*parameters.topUpBonus.percent/100).toLocaleString('ru-RU') }} = <strong>{{ (50000+50000*parameters.topUpBonus.percent/100).toLocaleString('ru-RU') }} so‘m</strong></p></div></section>
         <section class="card"><div class="card-head"><h2>{{ t('tariffs') }}</h2></div>
           <div class="table-wrap"><table><thead><tr><th>{{ t('tariffs') }}</th><th>{{ t('amount') }}</th><th>{{ t('duration') }}</th><th>{{ t('rate') }}</th><th>{{ t('enabled') }}</th></tr></thead><tbody>
@@ -303,3 +309,7 @@ onMounted(async () => {
     </div>
   </main>
 </template>
+<style scoped>
+@media(max-width:1200px){.topbar{height:auto;min-height:96px;flex-wrap:wrap;padding-top:16px;padding-bottom:16px}.top-actions{flex-wrap:wrap;min-width:0;gap:10px}}
+@media(max-width:650px){.top-actions>.station-home{flex-basis:100%}}
+</style>

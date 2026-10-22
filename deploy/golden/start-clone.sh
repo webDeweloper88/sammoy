@@ -3,8 +3,11 @@ set -eu
 cd /opt/sammoy/sammoy2
 [ -f /var/lib/sammoy2/factory-pending ] || exit 0
 [ -f .env ] && [ -f GOLDEN_TEMPLATE.json ] && [ -f .factory-identity-ready ]
-# Images must already be loaded in the factory image; no builds or downloads here.
-/opt/sammoy/sammoy2/deploy/start-post.sh
+# The normal post unit starts after the verified offline image loader.
+# A manual invocation can still start the stack explicitly.
+if ! systemctl is-active --quiet sammoy2-post.service; then
+    /opt/sammoy/sammoy2/deploy/start-post.sh
+fi
 python3 - <<'PY'
 import time,urllib.request
 for attempt in range(30):

@@ -1,0 +1,15 @@
+[Unit]
+Description=LABRIX load verified offline ARM64 images on fresh clone
+After=docker.service sammoy2-factory-identity.service
+Requires=docker.service sammoy2-factory-identity.service
+Before=sammoy2-post.service sammoy2-factory-app.service
+ConditionPathExists=/var/lib/sammoy2/factory-pending
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/sammoy/sammoy2/deploy/golden/load-images.py
+TimeoutStartSec=900
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

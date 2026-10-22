@@ -28,3 +28,14 @@ class PulseJournalTests(unittest.TestCase):
             cwd=Path(__file__).resolve().parent)
         self.assertEqual(result.returncode,0)
         journal=PulseJournal(self.path);self.assertEqual(journal.value(),1);journal.close()
+
+    def test_filter_settings_and_fault_survive_restart_without_counter_reset(self):
+        a=PulseJournal(self.path);identity=a.stream_id;a.increment()
+        a.set_setting('bill_filter',{'min_pulse_ms':20})
+        a.set_setting('bill_filter_fault','stuck_active');a.close()
+        b=PulseJournal(self.path)
+        self.assertEqual(b.stream_id,identity);self.assertEqual(b.value(),1)
+        self.assertEqual(b.get_setting('bill_filter'),{'min_pulse_ms':20})
+        self.assertEqual(b.get_setting('bill_filter_fault'),'stuck_active')
+        b.set_setting('bill_filter_fault',None);self.assertIsNone(b.get_setting('bill_filter_fault'))
+        self.assertEqual(b.value(),1);b.close()

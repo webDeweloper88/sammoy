@@ -10,6 +10,20 @@ from app import wallet_api as api
 
 
 class WalletApiTests(unittest.TestCase):
+    def test_stale_single_copy_mode_cannot_write_after_replication_restored(self):
+        with patch.object(api.psycopg,'connect') as connect:
+            connection=connect.return_value.__enter__.return_value
+            connection.execute.return_value.fetchone.return_value={'setting_value':{**self.cfg,'single_node':False}}
+            from app.wallet_domain import WalletConflict
+            with self.assertRaises(WalletConflict):
+                with api.store_context({**self.cfg,'single_node':True}):self.fail('Stale single-copy context accepted')
+    def test_management_sender_address_is_bound_to_the_registered_post(self):
+        from app import wallet_management
+        body={'site_id':'SITE','sender_post':1,'timestamp':int(time.time()),'payload':{}}
+        path='/api/wallet/internal/management-probe'
+        with patch.object(wallet_management,'probe') as probe:
+            result=self.client.post(path,json=body,headers={'X-Wallet-Signature':api.signature('test-site-secret',path,body),'X-Real-IP':'10.0.0.99'})
+            self.assertEqual(result.status_code,409);probe.assert_not_called()
     def setUp(self):
         self.app=FastAPI();self.app.include_router(api.router);self.client=TestClient(self.app)
         self.cfg={'enabled':True,'site_id':'SITE','local_post':7,'primary_post':1,'standby_post':7,'generation':2,

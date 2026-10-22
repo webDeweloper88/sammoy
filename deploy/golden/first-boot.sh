@@ -10,6 +10,7 @@ if [ ! -f "$APP/.env" ]; then
     python3 "$APP/deploy/golden/identity.py" "$APP"
 fi
 [ -f "$APP/.factory-identity-ready" ] || { echo "Incomplete identity initialization; service intervention required"; exit 1; }
+python3 "$APP/deploy/golden/os_identity.py"
 [ -s /etc/machine-id ] || systemd-machine-id-setup
 ssh-keygen -A
 suffix="$(tr -d ':' </sys/class/net/eth0/address | tail -c 7)"

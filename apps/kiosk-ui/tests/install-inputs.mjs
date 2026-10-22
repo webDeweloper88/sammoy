@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict'
+import {formatActivationCode,networkContext,subnetHost,ipv4} from '../src/install-inputs.js'
+assert.equal(formatActivationCode(' abcd1234 ef56-7890 '),'ABCD-1234-EF56-7890')
+assert.equal(formatActivationCode('abcd-1234-ef56-7890EXTRA'),'ABCD-1234-EF56-7890')
+assert.equal(formatActivationCode('abcd1'),'ABCD-1')
+assert.equal(formatActivationCode(''),'')
+const context=networkContext({interfaces:[{interface:'wlan0',connected:true,address:'172.16.2.8',prefix:24},{interface:'eth0',connected:true,address:'192.168.50.20',prefix:23}]},'127.0.0.1')
+assert.deepEqual(context,{address:'192.168.50.20',prefix:23,stem:'192.168.50.'})
+assert(subnetHost('192.168.51.21',context))
+assert(!subnetHost('192.168.50.0',context))
+assert(!subnetHost('192.168.51.255',context))
+assert(!subnetHost('192.168.52.21',context))
+assert.equal(ipv4('192.168.1.999'),null)
+assert.equal(networkContext(null,'127.0.0.1').stem,'')
+assert.equal(networkContext(null,'10.0.0.8').stem,'10.0.0.')
+console.log('Activation formatting and subnet-aware address helper passed')

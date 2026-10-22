@@ -11,6 +11,8 @@ const context=await browser.newContext({viewport:{width:1920,height:1080},hasTou
 await context.addInitScript(()=>sessionStorage.setItem('sammoy-owner-token','fixture'));
 const page=await context.newPage(),errors=[],posts=[];page.on('pageerror',e=>errors.push(e.message));
 let names=['water','osmos','nano','foam','wax','chem','vacuum','air'];
+let billSettings={min_pulse_ms:5,max_pulse_ms:1000,stuck_active_ms:5000,min_gap_ms:5,startup_idle_ms:500,max_pulses_per_second:0,active_low:true},billFault=null;
+const standardBill={min_pulse_ms:20,max_pulse_ms:250,stuck_active_ms:5000,min_gap_ms:20,startup_idle_ms:500,max_pulses_per_second:20,active_low:true};
 let deviceType='wash',credit=1744,pending=null,offline=false;
 const diag=()=>({state:{deviceType,creditSum:credit,phase:'idle',lastRfidResult:'card_rejected',lastRfidProcessedAt:'2026-10-03T00:00:00Z',activeSessionCardUid:'private-uid'},simulation:{totalStopActive:null,coinPulses:0,licenseMode:'real'},parameters:{billPulseSum:1000},system:{disk_free_bytes:1000000000,temperature_c:44},io:{available:true,data:{modbus_ok:true,outputs:Object.fromEntries(names.map(n=>[n,false])),inputs:{total_stop:true},raw_inputs:[1,1,0,1,1,1,1,1],nv9_pulses:12}},configuration:{available:true,data:{transport:{device:'/dev/ttyUSB0',baud_rate:9600},inputs:Array.from({length:8},(_,i)=>({address:i,name:i===2?'total_stop':'di'+(i+1)})),outputs:names.map((name,address)=>({name,address})),bill_acceptor:{gpio_chip:'/dev/gpiochip0',gpio_line:33},nv9_listener_alive:true}},rfid:{available:true,data:{online:true,bus:7,firmware:'1.6.7',latest:{uid:'private-uid'},present:false}}});
 const connection={hardware:{complete:true,wlan0_mac_present:true,microsd_cid_present:true,hardware_fingerprint_hash:'fixture-fingerprint'},license:{state:'valid',reason:'fixture decision',last_error:'fixture network timeout',grace_until:'2026-10-15T00:00:00Z',hardware_bound:true},license_settings:{site_code:'SITE',post_no:1,gateway_url:'https://example.test',enabled:false,sync_interval_seconds:43200,grace_seconds:604800},click_settings:{enabled:false,min_amount_sum:1000,max_amount_sum:10000000}};
@@ -28,6 +30,7 @@ await page.route('**/api/**',async route=>{
   data={ok:true,pending,interfaces:[{interface:'eth0',connected:true,address:'10.10.10.8',prefix:24,gateway:'10.10.10.1',mode:'dhcp',primary:true,dns:['10.10.10.1']},{interface:'wlan0',connected:false,mode:'dhcp'}]};
   if(path.endsWith('/wifi'))data={networks:[{ssid:'WashWiFi',signal:80,security:'wpa-psk'}]};
  }
+ else if(path==='/api/admin/service/bill-filter'||path==='/api/admin/service/bill-filter/reset'){if(req.method()==='POST'){if(path.endsWith('/reset'))billFault=null;else billSettings=req.postDataJSON()}data={enabled:true,ready:!billFault,fault:billFault,active:false,settings:billSettings,presets:{generic:billSettings,standard_50_100ms:standardBill},raw_pulses:10,validated_pulses:10,published_pulses:123,repeated_edges:2,diagnostics:{timestamp_source:"kernel",max_queue_delay_ms:12,max_commit_ms:3},rejected:{},samples:[]};}
  else if(path==='/api/admin/service/storage')data={ok:true,disk_total_bytes:32*1024**3,disk_free_bytes:1.5*1024**3,free_percent:4.7,database_bytes:9000000,level:'critical',events:{count:35},protected_credit:{amount_sum:1744},retention:{financial_months:12,event_months:1,journal_limit_mb:256,last_run:{last_run_at:new Date().toISOString(),ok:true}}};
  else if(path==='/api/admin/service/click-payments'){const q=new URL(req.url()).searchParams;const older=q.has('before_id');data={intents:[{id:older?'older-payment':'current-payment',created_at:new Date().toISOString(),amount_sum:12000,status:q.get('status')==='all'?'credited':q.get('status'),gateway_status:'paid'}],summary:[{status:'credited',count:1,amount_sum:12000}],has_more:!older,next_cursor:older?null:{before_time:'2026-10-01T00:00:00Z',before_id:'older-id'}};}
  else if(path==='/api/admin/service/events')data={events:[{id:4,created_at:new Date().toISOString(),level:'info',event_type:'boot',message:'System ready'}],has_more:false};
@@ -62,5 +65,15 @@ await page.getByRole('button',{name:'Показать более ранние',e
 await page.screenshot({path:'../../docs/ui-admin-click-dark-1920.png',fullPage:true});assert(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
 await page.goto(origin+'/owner/parameters');await page.waitForURL('**/admin/diagnostics');
 deviceType='dry_fog';credit=0;names=['aroma_1','aroma_2','aroma_3','aroma_4','aroma_5','blackening','tank_air','purge'];await page.getByRole('button',{name:'Обновить',exact:true}).tap();await page.getByRole('cell',{name:'SHEIKH SULTAN',exact:true}).waitFor();assert.equal(await page.getByRole('rowheader',{name:'IN3',exact:true}).count(),1);assert.equal(await page.getByRole('cell',{name:'Не используется',exact:true}).count(),8);assert.equal(await page.getByText('Курок / Total Stop',{exact:true}).count(),0);await page.getByRole('row').filter({has:page.getByRole('cell',{name:'Очистка / продувка',exact:true})}).getByRole('button').tap();await page.getByRole('heading',{name:'Включить на 1 секунду: Очистка / продувка',exact:true}).waitFor();await page.getByRole('button',{name:'Отмена',exact:true}).tap();
+await page.locator('.bill-filter select').selectOption('standard_50_100ms');
+await page.getByText(/Время фронтов: ядро Linux/).waitFor();
+assert.equal(await page.getByLabel('Блокировка зависшего входа, мс',{exact:true}).inputValue(),'5000');
+await page.getByRole('button',{name:'Сохранить фильтр',exact:true}).tap();
+await page.getByText('Сохранено на этом устройстве',{exact:true}).waitFor();
+assert.deepEqual(posts.at(-1),['/api/admin/service/bill-filter',standardBill]);
+billFault='stuck_active';await page.getByText('Вход слишком долго активен',{exact:true}).waitFor();
+await page.getByRole('button',{name:'Сбросить ошибку после проверки контактов',exact:true}).tap();
+await page.getByText('Вход разблокирован',{exact:true}).waitFor();
+assert.deepEqual(posts.at(-1),['/api/admin/service/bill-filter/reset',{}]);
 assert.deepEqual(errors,[]);console.log('PASS Admin: routing, idle/stale guards, relay confirmation, network confirmation, Wi-Fi keyboard, dirty guard, diagnostic redaction, maintenance and themes');
 }finally{await browser?.close();server.kill()}
