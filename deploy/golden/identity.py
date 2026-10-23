@@ -24,6 +24,8 @@ def initialize(root):
         raise RuntimeError('Data already exists; refusing initialization')
     values = {
         'COMPOSE_PROJECT_NAME': 'sammoy2',
+        'IO_BILL_LEVEL_PROCESS': '1',
+        'IO_BILL_SAMPLER_NICE': '-10',
         'POSTGRES_DB': 'sammoy2', 'POSTGRES_USER': 'sammoy2',
         'POSTGRES_PASSWORD': secrets.token_hex(32),
         'WASH_ENGINE_JWT_SECRET': secrets.token_hex(48),

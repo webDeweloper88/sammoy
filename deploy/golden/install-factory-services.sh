@@ -31,6 +31,18 @@ Requires=sammoy2-factory-images.service
 After=sammoy2-factory-images.service
 EOF
 sh deploy/install-log-retention.sh
+if [ -f /opt/labrix-factory/updates.json ]; then
+    install -m 0644 deploy/golden/sammoy2-factory-updates.service deploy/sammoy2-software-updates.service deploy/sammoy2-update-cleanup.service deploy/sammoy2-update-cleanup.timer /etc/systemd/system/
+    for unit in sammoy2-post.service sammoy2-factory-app.service sammoy2-software-updates.service; do
+        install -d -m 0755 "/etc/systemd/system/$unit.d"
+        cat >"/etc/systemd/system/$unit.d/factory-updates.conf" <<'EOF'
+[Unit]
+Requires=sammoy2-factory-updates.service
+After=sammoy2-factory-updates.service
+EOF
+    done
+    systemctl enable sammoy2-factory-updates.service sammoy2-software-updates.service sammoy2-update-cleanup.timer
+fi
 touch /var/lib/sammoy2/factory-pending
 touch /var/lib/sammoy2/grow-pending
 systemctl daemon-reload

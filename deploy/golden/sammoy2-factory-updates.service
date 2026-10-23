@@ -1,0 +1,15 @@
+[Unit]
+Description=LABRIX initialize offline application updater on fresh clone
+After=sammoy2-factory-identity.service sammoy2-factory-images.service
+Requires=sammoy2-factory-identity.service sammoy2-factory-images.service
+Before=sammoy2-post.service sammoy2-factory-app.service sammoy2-software-updates.service
+ConditionPathExists=/var/lib/sammoy2/factory-pending
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/sammoy/sammoy2/deploy/golden/first-boot-updates.py
+TimeoutStartSec=300
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

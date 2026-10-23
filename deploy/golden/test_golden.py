@@ -34,6 +34,8 @@ class GoldenTests(unittest.TestCase):
             values=[]
             for root in clones:
                 env=dict(line.split('=',1) for line in (root/'.env').read_text().splitlines())
+                self.assertEqual(env['IO_BILL_LEVEL_PROCESS'],'1')
+                self.assertEqual(env['IO_BILL_SAMPLER_NICE'],'-10')
                 self.assertEqual(env['WASH_ENGINE_DEFAULT_OWNER_PASSWORD'],'labrix')
                 self.assertEqual(env['WASH_ENGINE_DEFAULT_ADMIN_PASSWORD'],'labrix')
                 handover=json.loads((root/'factory-access.json').read_text())

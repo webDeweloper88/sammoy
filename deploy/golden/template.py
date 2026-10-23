@@ -11,7 +11,7 @@ ROOTS = ('apps/kiosk-ui', 'services/io-helper', 'services/wash-engine', 'service
 EXCLUDED = {'.git', 'node_modules', 'dist', '__pycache__', '.pytest_cache', 'data', 'secrets', '.venv'}
 
 def ignore(directory, names):
-    return [n for n in names if n in EXCLUDED or n.startswith('.env') or n.endswith(('.pyc', '.sqlite3', '.sql', '.log')) or '.bak' in n or n == 'tokenGit']
+    return [n for n in names if (n=='windows' and Path(directory).parts[-2:]==('deploy','golden')) or n in EXCLUDED or n.startswith('.env') or n.endswith(('.pyc', '.sqlite3', '.sql', '.log')) or '.bak' in n or n == 'tokenGit']
 
 def export(destination, project=PROJECT):
     destination = Path(destination).resolve()
