@@ -68,3 +68,44 @@ class MaintenanceInterlockTests(unittest.TestCase):
             database.return_value.__enter__.return_value.execute.return_value.fetchone.return_value={'n':1}
             with self.assertRaises(HTTPException):u.maintenance_lease('prepare',u.Lease(id=uuid4()),'local-secret')
         self.assertNotIn('softwareUpdateJob',runtime.state)
+
+class QueueRecoveryScenarios(unittest.TestCase):
+    setUp=UpdateQueueTests.setUp
+    tick=UpdateQueueTests.tick
+    normal=UpdateQueueTests.normal
+    def test_busy_ordinary_post_is_deferred_then_resumes_with_same_id(self):
+        def busy(c,p,b):
+            if b['action']=='status' and p==3:return {**self.info,'ready':False}
+            return self.normal(c,p,b)
+        self.tick(busy)
+        row=self.q['posts'][2];self.assertEqual(row['status'],'waiting');self.assertEqual(row['reason'],'station_busy')
+        self.assertIn((2,'install'),self.calls)
+        self.q['posts'][1]['status']='completed';self.calls.clear();self.tick(self.normal)
+        self.assertEqual(row['id'],'3');self.assertIn((3,'install'),self.calls);self.assertNotIn((1,'install'),self.calls)
+
+    def test_busy_primary_waits_until_session_ends(self):
+        for row in self.q['posts'][1:]:row['status']='completed'
+        self.tick(lambda c,p,b:{**self.info,'ready':False})
+        self.assertEqual(self.q['posts'][0]['status'],'waiting')
+        self.tick(self.normal);self.assertIn((1,'install'),self.calls)
+
+    def test_lost_install_ack_keeps_same_job_and_resolves_receipt(self):
+        def lost(c,p,b):
+            if b['action']=='install':raise TimeoutError('ack lost')
+            return self.info
+        self.tick(lost);row=self.q['posts'][2];self.assertEqual(row['status'],'installing');self.assertEqual(row['id'],'3')
+        calls=[]
+        def recovered(c,p,b):calls.append(b['action']);return {'status':'completed'}
+        self.tick(recovered);self.assertEqual(row['status'],'completed');self.assertEqual(calls,['job'])
+
+    def test_offline_inflight_post_keeps_queue_and_never_starts_another(self):
+        self.q['posts'][2]['status']='installing'
+        def offline(c,p,b):self.calls.append((p,b['action']));raise TimeoutError('offline')
+        self.tick(offline);self.assertEqual(self.q['status'],'running');self.assertEqual(self.q['posts'][2]['status'],'installing');self.assertEqual(self.calls,[(3,'job')])
+
+    def test_rollback_or_interruption_stops_remaining_updates(self):
+        for status in ('failed','rolled_back','needs_review'):
+            with self.subTest(status=status):
+                self.q['status']='running';self.q['posts'][2]['status']='installing';self.calls.clear()
+                self.tick(lambda c,p,b:{'status':status,'error':'test_failure'})
+                self.assertEqual(self.q['status'],'needs_review');self.assertEqual(self.q['posts'][0]['status'],'waiting');self.assertEqual(self.q['posts'][1]['status'],'waiting')

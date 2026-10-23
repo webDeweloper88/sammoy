@@ -70,3 +70,85 @@ class AgentTests(unittest.TestCase):
             failed=root/'jobs'/'failed';failed.mkdir();a.atomic(failed/'job.json',{'status':'needs_review','finished_at':1});(failed/'database.dump').write_bytes(b'keep')
             a.cleanup(now=a.RETAIN+2)
             self.assertFalse((old/'database.dump').exists());self.assertTrue((failed/'database.dump').exists());self.assertTrue((root/'unmanaged').exists())
+
+class UpdateFailureScenarios(unittest.TestCase):
+    def scenario(self, *, idle_effect=None, journal=None, backup_error=False, health_effect=None):
+        from contextlib import ExitStack
+        with tempfile.TemporaryDirectory() as t, ExitStack() as stack:
+            root=Path(t);job_id=str(uuid4());folder=root/'jobs'/job_id;folder.mkdir(parents=True)
+            archive=folder/'package.tar.gz';archive.write_bytes(b'archive')
+            images=folder/'images.tar';images.write_bytes(b'images')
+            old={'release_no':2,'version':'previous'};a.atomic(root/'installed.json',old)
+            baseline={'stream':'unchanged','pulses':500};commands=[]
+            def command(*args,**kwargs):
+                commands.append(args)
+                if args[:2]==('docker','inspect'):return json.dumps([{'Image':'sha256:old','Config':{'Image':'sammoy2-wash-engine:latest'}}]).encode()
+                if args[:3]==('docker','image','inspect'):return json.dumps([{'Id':'sha256:new','Architecture':'arm64','Os':'linux'}]).encode()
+                return b''
+            overrides={'STORE':root,'verify':Mock(return_value={'services':{'wash-engine':'sha256:new'},'db_contract':'unchanged'}),'compose':Mock(return_value=['docker','compose']), 'cleanup':Mock(),'db_info':Mock(return_value=('user','db',1)),'space_required':Mock(return_value=1),'download':Mock(return_value=archive),'unpack':Mock(return_value=images),'config_references':Mock(return_value={'sha256:new':'sha256:new'}),'schema_contract':Mock(return_value='unchanged'),'idle':Mock(side_effect=idle_effect) if idle_effect else Mock(return_value=baseline),'journal':Mock(return_value=journal or baseline),'maintenance':Mock(),'backup':Mock(side_effect=a.UpdateError('database_backup_failed') if backup_error else None),'run':Mock(side_effect=command),'health':Mock(side_effect=health_effect)}
+            for name,value in overrides.items():stack.enter_context(patch.object(a,name,value))
+            job={'id':job_id,'envelope':{}};a.perform(job)
+            installed=a.load(root/'installed.json')
+            self.assertFalse(archive.exists());self.assertFalse(images.exists())
+            self.assertFalse(any('pg_restore' in str(c) for c in commands),'Rollback must never restore an old monetary database')
+            return job,commands,installed,overrides
+
+    def test_session_appearing_during_download_prevents_service_stop(self):
+        job,commands,installed,m=self.scenario(idle_effect=[a.UpdateError('station_busy')])
+        self.assertEqual(job['status'],'failed');self.assertEqual(installed['release_no'],2)
+        self.assertFalse(any('stop' in c for c in commands));m['backup'].assert_not_called()
+
+    def test_pulse_arriving_before_stop_cancels_and_restores_services(self):
+        job,commands,installed,m=self.scenario(journal={'stream':'unchanged','pulses':501})
+        self.assertEqual(job['status'],'rolled_back');self.assertEqual(job['error'],'cash_changed_before_install')
+        m['backup'].assert_not_called();self.assertEqual(installed['release_no'],2)
+        self.assertNotIn(('docker','tag','sha256:new','sammoy2-wash-engine:latest'),commands)
+
+    def test_backup_failure_never_activates_candidate(self):
+        job,commands,installed,m=self.scenario(backup_error=True)
+        self.assertEqual(job['status'],'rolled_back');self.assertEqual(job['error'],'database_backup_failed')
+        self.assertNotIn(('docker','tag','sha256:new','sammoy2-wash-engine:latest'),commands)
+        self.assertEqual(installed['release_no'],2)
+
+    def test_failed_candidate_returns_previous_release_and_preserves_receipt(self):
+        job,commands,installed,m=self.scenario(health_effect=[a.UpdateError('health_check_failed'),None])
+        self.assertEqual(job['status'],'rolled_back');self.assertEqual(installed,{'release_no':2,'version':'previous'})
+        self.assertIn(('docker','tag','sha256:old','sammoy2-wash-engine:latest'),commands)
+        self.assertEqual(m['health'].call_count,2)
+
+    def test_new_customer_session_prevents_rollback_restart(self):
+        baseline={'stream':'unchanged','pulses':500}
+        job,commands,installed,m=self.scenario(idle_effect=[baseline,a.UpdateError('station_busy')],health_effect=[a.UpdateError('health_check_failed')])
+        self.assertEqual(job['status'],'needs_review');self.assertEqual(installed['release_no'],2)
+        self.assertNotIn(('docker','tag','sha256:old','sammoy2-wash-engine:latest'),commands)
+        self.assertEqual(sum('up' in c for c in commands),1)
+
+    def test_failed_rollback_is_not_reported_as_success(self):
+        job,commands,installed,m=self.scenario(health_effect=[a.UpdateError('health_check_failed'),a.UpdateError('health_check_failed')])
+        self.assertEqual(job['status'],'needs_review');self.assertEqual(installed['release_no'],2)
+
+    def test_idle_checks_each_money_and_output_guard(self):
+        for field in ('creditSum','activeSessionId','activeMode','armedMode','requestedOutput','walletTransferPending','walletCashHeld','vipRemainingSeconds'):
+            with self.subTest(field=field),patch.object(a,'get',return_value={'state':{'outputsOffConfirmed':True,field:1}}):
+                with self.assertRaisesRegex(a.UpdateError,'station_busy'):a.idle()
+        with patch.object(a,'get',return_value={'state':{'outputsOffConfirmed':False}}):
+            with self.assertRaisesRegex(a.UpdateError,'outputs_not_confirmed_off'):a.idle()
+
+    def test_input_fault_and_active_bill_block_install(self):
+        for state in ({'active':True},{'fault':'stuck'}):
+            with self.subTest(state=state),patch.object(a,'get',side_effect=[{'state':{'outputsOffConfirmed':True}},state]):
+                with self.assertRaisesRegex(a.UpdateError,'cash_input_not_ready'):a.idle()
+
+class SubmissionSafetyTests(unittest.TestCase):
+    def test_second_different_job_is_rejected_while_first_is_running(self):
+        with tempfile.TemporaryDirectory() as t,patch.object(a,'STORE',Path(t)),patch.object(a,'verify'),patch.object(a,'idle'),patch.object(a.threading,'Thread') as worker:
+            a.submit({'id':str(uuid4()),'envelope':{'manifest':{}}})
+            with self.assertRaisesRegex(a.UpdateError,'another_update_pending'):
+                a.submit({'id':str(uuid4()),'envelope':{'manifest':{}}})
+            self.assertEqual(worker.call_count,1)
+
+    def test_old_release_cannot_be_installed_as_a_new_update(self):
+        with tempfile.TemporaryDirectory() as t:
+            folder=Path(t);public=folder/'public';public.write_bytes(b'fixture');hardware=folder/'hardware';hardware.write_text('cubie-a7a');a.atomic(folder/'installed.json',{'release_no':2})
+            with patch.object(a,'STORE',folder),patch.object(a,'PUBLIC',public),patch.object(a,'HARDWARE',hardware),patch.object(a.os,'uname',return_value=Mock(machine='aarch64')),patch.object(a,'verify_release',return_value={'hardware':'cubie-a7a','arch':'aarch64','release_no':1}):
+                with self.assertRaisesRegex(a.UpdateError,'release_not_newer'):a.verify({})
