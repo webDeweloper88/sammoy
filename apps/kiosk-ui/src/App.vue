@@ -3,6 +3,8 @@ import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { api, changePassword, getParameters, login, me, saveParameters } from './api'
 import TouchKeyboard from './TouchKeyboard.vue'
 import OwnerPages from './OwnerPages.vue'
+import SoftwareUpdates from './SoftwareUpdates.vue'
+import UpdateNotice from './UpdateNotice.vue'
 import SiteOwner from './SiteOwner.vue'
 import WalletSettings from './WalletSettings.vue'
 import AdminPages from './AdminPages.vue'
@@ -16,8 +18,8 @@ const page = ref('parameters')
 const account = ref(null)
 const pageDirty = ref(false)
 const pendingPage = ref('')
-const navLabels = { ru: ['Обзор мойки', 'Параметры', 'Отчёты', 'VIP и карты', 'Экран мойки', 'Telegram', 'Кошелёк', 'Учётная запись'], uz: ['Umumiy ko‘rinish', 'Sozlamalar', 'Hisobotlar', 'VIP va kartalar', 'Yuvish ekrani', 'Telegram', 'Hamyon', 'Hisob'], en: ['Site overview', 'Settings', 'Reports', 'VIP & cards', 'Wash screen', 'Telegram', 'Wallet', 'Account'] }
-const pageKeys = ['site', 'parameters', 'reports', 'cards', 'kiosk-settings', 'telegram', 'wallet', 'account']
+const navLabels = { ru: ['Обзор мойки', 'Параметры', 'Отчёты', 'VIP и карты', 'Экран мойки', 'Telegram', 'Кошелёк', 'Обновления ПО', 'Учётная запись'], uz: ['Umumiy ko‘rinish', 'Sozlamalar', 'Hisobotlar', 'VIP va kartalar', 'Yuvish ekrani', 'Telegram', 'Hamyon', 'Yangilanishlar', 'Hisob'], en: ['Site overview', 'Settings', 'Reports', 'VIP & cards', 'Wash screen', 'Telegram', 'Wallet', 'Updates', 'Account'] }
+const pageKeys = ['site', 'parameters', 'reports', 'cards', 'kiosk-settings', 'telegram', 'wallet', 'updates', 'account']
 const adminKeys = ['diagnostics', 'connections', 'license', 'click', 'maintenance']
 const visiblePages = computed(() => account.value?.role === 'admin' ? [...adminKeys, 'account'] : pageKeys)
 const adminLabels = {ru:['Диагностика','Подключение','Лицензия','Click','Обслуживание'],uz:['Diagnostika','Ulanish','Litsenziya','Click','Xizmat'],en:['Diagnostics','Connection','License','Click','Maintenance']}
@@ -249,6 +251,7 @@ onMounted(async () => {
       </div>
     </header>
 
+    <UpdateNotice v-if="token && !passwordChangeRequired && account?.role==='owner' && page!=='updates'" :token="token" :language="language" @open="navigate('updates')"/>
     <nav v-if="token && !passwordChangeRequired" class="owner-nav" :aria-label="account?.role === 'admin' ? 'Admin' : 'Owner'"><button v-for="item in visiblePages" :key="item" v-show="item !== 'reports' || account?.role === 'owner'" class="quiet" :class="{selected:page === item}" @click="navigate(item)">{{ pageLabel(item) }}</button></nav>
     <section class="heading" v-if="!token || passwordChangeRequired || page === 'parameters'"><h1>{{ t(token ? 'owner' : 'access') }}</h1><p>{{ t(token ? 'intro' : 'accessHint') }}</p></section>
 
@@ -276,6 +279,7 @@ onMounted(async () => {
 
     <div v-else-if="loading && !parameters" class="card loading">{{ t('loading') }}</div>
     <AdminPages v-else-if="account?.role === 'admin' && adminKeys.includes(page)" :key="page" :page="page" :token="token" :language="language" @dirty="pageDirty = $event" />
+    <SoftwareUpdates v-else-if="account?.role==='owner' && page==='updates'" :token="token" :language="language"/>
     <WalletSettings v-else-if="account?.role==='owner' && page==='wallet'" :token="token" @dirty="pageDirty=$event" :language="language"/>
       <SiteOwner v-else-if="page === 'site' || page === 'reports'" :key="page" :initial-view="page === 'reports' ? 'reports' : 'overview'" :token="token" :language="language" @dirty="pageDirty = $event" />
       <OwnerPages v-else-if="page !== 'parameters'" :key="page" :page="page" :token="token" :language="language" :account="account" @dirty="pageDirty = $event" @account="updateAccount" />

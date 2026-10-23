@@ -1,0 +1,8 @@
+[Unit]
+Description=Limit LABRIX update storage
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1h
+Persistent=true
+[Install]
+WantedBy=timers.target

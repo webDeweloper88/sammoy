@@ -438,6 +438,18 @@ def internal(action:str,body:dict,x_wallet_signature:Annotated[str|None,Header()
     payload=body.get('payload')
     if not isinstance(payload,dict):raise HTTPException(422,'Payload required')
     from fastapi.responses import JSONResponse
+    if action=='software-update':
+        from .software_updates import internal as update_internal
+        code=200
+        try:
+            expected_ip=urlsplit(cfg['peer_urls'].get(str(sender),'')).hostname
+            if not x_real_ip or not expected_ip or ipaddress.ip_address(x_real_ip)!=ipaddress.ip_address(expected_ip):
+                raise HTTPException(403,'Post address does not match registry')
+            result=update_internal(payload,cfg,sender)
+        except HTTPException as exc:code=exc.status_code;result={'detail':exc.detail}
+        except Exception:code=503;result={'detail':'Update service unavailable'}
+        result={**result,'request_digest':hashlib.sha256(canonical(body)).hexdigest()}
+        return JSONResponse(result,status_code=code,headers={'X-Wallet-Signature':signature(secret,path,result)})
     if action=='owner-site':
         # Reports and Owner settings never take the wallet journal/control lock.
         # A slow report must not serialize NFC operations across the site.

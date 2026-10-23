@@ -1,0 +1,6 @@
+[Unit]
+Description=Remove expired LABRIX update rollback files
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/sammoy/sammoy2/deploy/software-update-agent.py --cleanup
+UMask=0077

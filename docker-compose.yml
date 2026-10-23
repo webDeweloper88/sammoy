@@ -124,6 +124,7 @@ services:
       - /sys:/host-sys:ro
       - /etc/hostname:/host-etc/hostname:ro
       - /run/sammoy2-admin:/run/sammoy2-admin:ro
+      - /etc/labrix-updates:/etc/labrix-updates:ro
 
     ports:
       - "127.0.0.1:8090:8080"

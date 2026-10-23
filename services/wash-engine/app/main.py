@@ -2073,6 +2073,8 @@ def get_click_settings(include_secret: bool = True) -> dict[str, object]:
 
 
 def require_click_ready(config: dict[str, object]) -> None:
+    from .software_maintenance import blocked
+    if blocked(wash_runtime):raise HTTPException(409,"Software update in progress")
     if not config.get("enabled"):
         raise HTTPException(status.HTTP_409_CONFLICT, "Click is disabled")
     license_row = read_license_cache()
@@ -4084,3 +4086,8 @@ app.add_event_handler("shutdown", close_sync_http_clients)
 
 from .telegram_mobile import router as telegram_mobile_router
 app.include_router(telegram_mobile_router)
+
+from .software_updates import router as software_router, agent_router as update_agent_router, ensure_worker as ensure_update_worker
+app.include_router(software_router)
+app.include_router(update_agent_router)
+app.add_event_handler("startup", ensure_update_worker)

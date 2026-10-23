@@ -354,6 +354,8 @@ class WashRuntime:
             )
             conn.commit()
         with self.lock:
+            from .software_maintenance import blocked
+            if blocked(self) and mode != "pause":raise ValueError("Software update in progress")
             from .dry_fog_purge import cancel
             cancel(self)
             self.params = normalized
@@ -812,6 +814,10 @@ class WashRuntime:
                 self._all_off_sync()
 
     def tick(self) -> None:
+        from .software_maintenance import blocked
+        if blocked(self):
+            self._all_off_sync()
+            return
         if self.state.get("deviceProfileMismatch"):
             from .dry_fog_purge import cancel
             with self.lock:cancel(self)
@@ -1526,6 +1532,10 @@ class WashRuntime:
 
     @card_operation()
     def _apply_rfid_card_locked(self, uid: str, event: dict[str, Any]) -> None:
+        from .software_maintenance import blocked
+        if blocked(self):
+            self.state["lastRfidStatus"] = "software_update_pending"
+            return
         # Reject before wallet freeze, lookups, sessions or financial mutations.
         # ISO-DEP is a device class, not a guaranteed phone detector.
         sak = event.get("sak")

@@ -1,0 +1,21 @@
+[Unit]
+Description=LABRIX signed application updater
+After=docker.service sammoy2-admin-system.service
+Requires=docker.service
+[Service]
+ExecStart=/usr/bin/python3 /opt/sammoy/sammoy2/deploy/software-update-agent.py
+RuntimeDirectory=sammoy2-admin
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+StateDirectory=labrix-updates
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/labrix-updates /run/sammoy2-admin /opt/sammoy/sammoy2
+[Install]
+WantedBy=multi-user.target

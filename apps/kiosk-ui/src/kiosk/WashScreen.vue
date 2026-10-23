@@ -46,6 +46,7 @@ const timePrimary=computed(()=>running.value||paused.value)
 const statusText=computed(()=>{
  const s=state.value
  if(!fresh.value)return t.value.offline
+ if(s?.softwareUpdateJob)return t.value.softwareUpdating
  if(s?.licenseLocked)return t.value.locked
  if(s?.walletTransferPending)return s.walletOperationInProgress ? t.value.walletProcessing : t.value.walletPending
  if(!ready.value)return t.value.hardware
