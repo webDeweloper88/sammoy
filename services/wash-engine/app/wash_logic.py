@@ -1803,18 +1803,28 @@ class WashRuntime:
         if not session_id:
             session_id = self._ensure_session_locked("card")
         self._flush_usage_locked(close=True, settle_spent=True)
+        self._ensure_pause_budget_locked()
+        from .local_card_pause import save
         with db() as conn:
+            previous = conn.execute('SELECT metadata, balance_sum FROM rfid_cards WHERE uid=%s FOR UPDATE', (uid,)).fetchone()
+            if previous is None:
+                self.state['lastRfidStatus'] = 'customer_balance_changed'
+                return
+            pause_metadata = save(previous.get('metadata'), self.state['deviceType'],
+                                  self.state['_pauseBudgetFloat'], self.params['freePauseSeconds'],
+                                  existing_balance=int(previous['balance_sum']))
             row = conn.execute(
                 """
                 UPDATE rfid_cards
                 SET balance_sum = balance_sum + %s,
                     bonus_sum = bonus_sum + %s,
+                    metadata = %s,
                     last_seen_at = now(),
                     updated_at = now()
                 WHERE uid = %s
                 RETURNING balance_sum
                 """,
-                (amount_sum, bonus_remaining(self), uid),
+                (amount_sum, bonus_remaining(self), Jsonb(pause_metadata), uid),
             ).fetchone()
             conn.execute('UPDATE wash_sessions SET bonus_remaining_sum=0 WHERE id=%s',(session_id,))
             balance_after = int(row["balance_sum"] if row else amount_sum)
@@ -1853,20 +1863,27 @@ class WashRuntime:
         if amount_sum <= 0:
             return
         with db() as conn:
-            card=conn.execute('SELECT bonus_sum FROM rfid_cards WHERE uid=%s FOR UPDATE',(uid,)).fetchone()
+            card=conn.execute('SELECT bonus_sum, metadata FROM rfid_cards WHERE uid=%s FOR UPDATE',(uid,)).fetchone()
+            if card is None:
+                self.state['lastRfidStatus'] = 'customer_balance_changed'
+                return
+            from .local_card_pause import restore, consume
+            restored_pause = restore(card.get('metadata'), self.state['deviceType'], self.params['freePauseSeconds'])
+            consumed_metadata = consume(card.get('metadata'), self.state['deviceType'])
             bonus=int((card or {}).get('bonus_sum') or 0)
             row = conn.execute(
                 """
                 UPDATE rfid_cards
                 SET balance_sum = 0,
                     bonus_sum = 0,
+                    metadata = %s,
                     last_seen_at = now(),
                     updated_at = now()
                 WHERE uid = %s
                   AND balance_sum = %s
                 RETURNING balance_sum
                 """,
-                (uid, amount_sum),
+                (Jsonb(consumed_metadata), uid, amount_sum),
             ).fetchone()
             conn.commit()
         if row is None:
@@ -1876,11 +1893,15 @@ class WashRuntime:
         self.state["creditSum"] = max(0, int(self.state["creditSum"]) + amount_sum)
         self.state["_creditFloat"] = float(self.state["creditSum"])
         self.state["lastCreditSource"] = "card"
+        self.state.update(_pauseBudgetInitialized=True, _pauseBudgetFloat=restored_pause,
+                          freePauseRemaining=int(ceil(restored_pause)))
         from .bonus import add
         add(self,bonus)
         self._record_credit_locked(amount_sum, "card", None, {"uid": uid, "rfid_event": event})
         with db() as conn:
-            conn.execute("UPDATE wash_sessions SET bonus_remaining_sum=%s WHERE id=%s",(self.state["bonusSum"],self.active_session_id));conn.commit()
+            conn.execute("UPDATE wash_sessions SET bonus_remaining_sum=%s, metadata=metadata || %s WHERE id=%s",
+                         (self.state["bonusSum"], Jsonb({'pause_budget_initialized': True,
+                           'free_pause_remaining': restored_pause}), self.active_session_id));conn.commit()
         session_id = self.active_session_id
         with db() as conn:
             conn.execute(
