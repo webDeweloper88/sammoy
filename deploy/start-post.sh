@@ -1,6 +1,14 @@
 #!/bin/sh
 set -eu
 cd /opt/sammoy/sammoy2
+# Existing deployments retain the legacy launcher. Invalid records fail closed.
+board=$(python3 deploy/board_runtime.py selected)
+if [ "$board" = cl3566-unconfirmed ]; then
+    exec python3 deploy/board_runtime.py factory
+fi
+if [ "$board" = cl3566-a-e ]; then
+    exec python3 deploy/board_runtime.py start
+fi
 profile='full'
 [ ! -f .hardware-profile ] || profile=$(cat .hardware-profile)
 case "$profile" in

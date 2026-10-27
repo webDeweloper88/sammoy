@@ -16,7 +16,7 @@ from socketserver import UnixStreamServer
 ROOT = Path('/opt/sammoy/sammoy2')
 SOCKET = Path('/run/sammoy2-admin/system.sock')
 STATE = Path('/var/lib/sammoy2-admin/system-job.json')
-ACTIONS = frozenset(('reboot', 'poweroff', 'settings', 'full', 'hardware'))
+ACTIONS = frozenset(('reboot', 'poweroff', 'settings', 'full', 'hardware', 'board-cubie-a7a', 'board-cl3566-a-e'))
 lock = threading.Lock()
 busy = False
 
@@ -49,16 +49,14 @@ def run(args):
 
 
 def compose(profile):
-    files = {'full': [], 'factory-only': ['docker-compose.factory.yml'],
-             'relay-only': ['docker-compose.relay-only.yml'],
-             'nfc-relay': ['docker-compose.nfc-relay.yml'],
-             'dry-fog': ['docker-compose.nfc-relay.yml', 'docker-compose.dry-fog.yml']}
-    if profile not in files:
-        raise ValueError('Invalid hardware profile')
-    return ['docker', 'compose', '-f', 'docker-compose.yml'] + [x for f in files[profile] for x in ('-f', f)]
+    from board_runtime import compose as board_compose
+    return board_compose(profile)
 
 
 def perform(action):
+    if action in ('board-cubie-a7a','board-cl3566-a-e'):
+        run(['/usr/bin/python3',str(ROOT/'deploy/confirm-board-profile.py'),action.removeprefix('board-')])
+        return
     if action == 'hardware':
         run(['/usr/bin/timeout', '--signal=TERM', '--kill-after=15', '420',
              '/usr/bin/python3', str(ROOT / 'deploy/apply-commissioning-profile.py')])
@@ -129,8 +127,12 @@ class Handler(BaseHTTPRequestHandler):
         status,result=404,{'detail':'Not found'}
         try:
             _,uid,_=struct.unpack('3i',self.connection.getsockopt(socket.SOL_SOCKET,socket.SO_PEERCRED,12))
-            if uid!=0 or not self.path.startswith('/actions/'):raise ValueError('Forbidden')
-            with lock:status,result=job_status(self.path.removeprefix('/actions/'))
+            if uid!=0:raise ValueError('Forbidden')
+            if self.path=='/board':
+                from board_profiles import inspect
+                result=inspect();status=200
+            elif self.path.startswith('/actions/'):
+                with lock:status,result=job_status(self.path.removeprefix('/actions/'))
         except (ValueError,TypeError,OSError):pass
         encoded=json.dumps(result).encode()
         self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Cache-Control','no-store');self.send_header('Content-Length',str(len(encoded)));self.end_headers();self.wfile.write(encoded)
@@ -150,7 +152,7 @@ class Handler(BaseHTTPRequestHandler):
                 previous = json.loads(STATE.read_text()) if STATE.exists() else {}
                 if previous.get('request_id') == job['request_id']:
                     status, result = 202, previous
-                elif busy or previous.get('status') in ('accepted', 'running') or (previous.get('status') == 'failed' and previous.get('action') != 'hardware'):
+                elif busy or previous.get('status') in ('accepted', 'running') or (previous.get('status') == 'failed' and previous.get('action') not in ('hardware','board-cubie-a7a','board-cl3566-a-e')):
                     status, result = 409, {'detail': 'Review the existing maintenance job'}
                 else:
                     result = {**job, 'status': 'accepted', 'ok': True}

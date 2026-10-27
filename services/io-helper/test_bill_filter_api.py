@@ -146,3 +146,29 @@ class BillFilterApiTests(unittest.TestCase):
         line.event_read.assert_not_called();line.event_wait.assert_not_called()
         self.assertEqual(line.request.call_args.args[0].request_type,main.gpiod.line_request.DIRECTION_INPUT)
         self.assertEqual(main.APP_STATE['bill_trace'].summary()['timestamp_source'],'sampled_monotonic')
+
+class VendorListenerIntegrationTests(unittest.TestCase):
+    def test_vendor_source_uses_existing_filter_and_durable_journal(self):
+        from bill_level_reader import LevelReader
+        with tempfile.TemporaryDirectory() as directory:
+            journal=PulseJournal(str(Path(directory)/'counter.sqlite3'))
+            old=dict(main.APP_STATE);stop=threading.Event()
+            line=Mock();line.get_value.return_value=1
+            reader=LevelReader(line,True,False,0,25)
+            for ms in range(1,31000):
+                reader.observe(ms>=1000 and (ms-1000)%150<50,ms/1000)
+            reader.start=Mock();original=reader.read
+            def read():
+                if not reader.pending():stop.set()
+                return original()
+            reader.read=read
+            try:
+                main.APP_STATE['pulse_counter']=journal
+                with patch.object(main,'VendorSysfsLine',return_value=line),patch.object(main,'VendorProcessLevelReader',return_value=reader),patch.object(main.gpiod,'chip') as gpiod,patch.object(main.time,'monotonic',side_effect=[0]+[100]*3000):
+                    main.nv9_listener({'bill_acceptor':{'source':'vendor-sysfs','reader':'level-process'}},journal,stop)
+                self.assertEqual(journal.value(),200)
+                gpiod.assert_not_called();line.release.assert_called_once()
+                journal.close();journal=PulseJournal(str(Path(directory)/'counter.sqlite3'))
+                self.assertEqual(journal.value(),200)
+            finally:
+                journal.close();main.APP_STATE.clear();main.APP_STATE.update(old)

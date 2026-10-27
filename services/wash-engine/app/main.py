@@ -29,6 +29,7 @@ from .connectivity import GatewayConnectivity
 from .db import close_pool, db, open_pool
 from .io_client import io_request
 from .install_config import clear_post_identity, resolve_site_token
+from .storage_identity import selected_board, cl3566_identity
 from .kiosk_defaults import normalize_kiosk_settings
 from .reporting import reconcile_session_credit
 from .schema import (
@@ -573,6 +574,22 @@ def get_hardware_identity(config: dict[str, object] | None = None) -> dict[str, 
         "/host-sys/class/net/wlan0/address",
         "/sys/class/net/wlan0/address",
     ]).lower().replace(":", "")
+    # New platforms require an explicit host-confirmed selection. Legacy Cubie
+    # identity remains byte-for-byte unchanged when this record is absent.
+    try:
+        board = selected_board(Path(os.environ.get("LABRIX_BOARD_PROFILE_FILE", "/etc/labrix/board-profile.json")))
+        if board == "cl3566-a-e":
+            return cl3566_identity(config, wlan0_mac, [Path("/host-sys/block"), Path("/sys/block")])
+        if board is None and any(p.exists() for p in (
+            Path("/host-sys/bus/platform/drivers/jwsioc_gpio/jwsioc_a"),
+            Path("/sys/bus/platform/drivers/jwsioc_gpio/jwsioc_a"),
+        )):
+            raise ValueError("Confirm the CL3566 board profile before licensing")
+    except (ValueError, OSError, TypeError, KeyError):
+        return {"complete": False, "identity_error": "board_or_emmc_identity_unavailable",
+                "hardware_fingerprint_hash": "", "wlan0_mac_hash": "", "microsd_cid_hash": "",
+                "wlan0_mac_present": bool(wlan0_mac), "microsd_cid_present": False,
+                "wlan0_mac_tail": "", "microsd_cid_tail": ""}
     microsd_cid = read_microsd_cid()
     complete = bool(wlan0_mac and microsd_cid)
     identity: dict[str, object] = {
@@ -4063,6 +4080,16 @@ def commissioning_device_write(payload:LocalDevice):
     from .wallet_domain import WalletConflict
     try:return request_local(payload)
     except WalletConflict as exc:raise HTTPException(409,str(exc)) from None
+
+from .board_setup import BoardChoice, host_board, request_board
+
+@app.get('/api/commissioning/board',dependencies=[Depends(commissioning_access)])
+def commissioning_board_read():
+    return host_board()
+
+@app.post('/api/commissioning/board',dependencies=[Depends(commissioning_access)])
+def commissioning_board_write(payload:BoardChoice):
+    return request_board(payload,get_commissioning_state())
 
 from .system_api import HardwareRequest, request_hardware_apply
 

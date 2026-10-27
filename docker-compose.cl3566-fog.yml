@@ -1,0 +1,8 @@
+# Append after docker-compose.cl3566.yml for a dry-fog station.
+services:
+  io-helper:
+    volumes:
+      - ./config/io-map.cl3566-fog.yaml:/config/io-map.yaml:ro
+  wash-engine:
+    environment:
+      WASH_ENGINE_DEVICE_TYPE: dry_fog

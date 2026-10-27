@@ -6,11 +6,17 @@ from collections import deque
 from datetime import datetime, timezone
 
 from pn532_linux import LinuxI2cPn532
+from pn532_hsu import LinuxHsuPn532
 
 
 class RfidReader:
     def __init__(self, config):
         self.enabled = bool(config.get("enabled", False))
+        self.transport = config.get("transport", "i2c")
+        if self.transport not in ("i2c", "hsu"):
+            raise ValueError("Unknown PN532 transport")
+        self.device = config.get("device", "/dev/ttyS9")
+        self.baud_rate = int(config.get("baud_rate", 115200))
         self.bus = int(config.get("bus", 7))
         self.address = int(config.get("address", 0x24))
         self.poll_timeout = float(config.get("poll_timeout_seconds", 0.25))
@@ -23,6 +29,8 @@ class RfidReader:
         self.state = {
             "enabled": self.enabled,
             "online": False,
+            "transport": self.transport,
+            "device": self.device if self.transport == "hsu" else f"/dev/i2c-{self.bus}",
             "bus": self.bus,
             "address": self.address,
             "firmware": None,
@@ -78,7 +86,8 @@ class RfidReader:
         while self.enabled and not stop_event.is_set():
             reader = None
             try:
-                reader = LinuxI2cPn532(self.bus, self.address)
+                reader = (LinuxI2cPn532(self.bus, self.address) if self.transport == "i2c"
+                          else LinuxHsuPn532(self.device, self.baud_rate))
                 firmware = reader.firmware_version
                 reader.SAM_configuration()
                 with self.lock:
@@ -86,7 +95,7 @@ class RfidReader:
                         online=True, last_error=None,
                         firmware=".".join(str(part) for part in firmware[1:]),
                     )
-                print(f"PN532 ONLINE: /dev/i2c-{self.bus}, address 0x{self.address:02X}, firmware {firmware}", flush=True)
+                print(f"PN532 ONLINE: {self.transport}, {self.state['device']}, firmware {firmware}", flush=True)
                 while not stop_event.is_set():
                     target = reader.read_target_info(timeout=self.poll_timeout)
                     self.observe(**target) if target else self.observe(None)

@@ -1,0 +1,19 @@
+# Append only for a confirmed CL3566-A-E. Requires Compose !override support.
+services:
+  io-helper:
+    devices: !override
+      - /dev/ttyS7:/dev/ttyS7
+      - /dev/ttyS9:/dev/ttyS9
+    volumes:
+      - ./config/io-map.cl3566.yaml:/config/io-map.yaml:ro
+      - /sys/external_gpio:/sys/external_gpio:ro
+    environment:
+      IO_BILL_LEVEL_PROCESS: "1"
+      IO_BILL_SAMPLER_NICE: "-10"
+  wash-engine:
+    volumes:
+      - /etc/labrix:/etc/labrix:ro
+networks:
+  sammoy2:
+    driver_opts:
+      com.docker.network.bridge.name: labrix-cl3566

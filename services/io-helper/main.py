@@ -11,7 +11,8 @@ from bill_filter import BillFilter, normalize as normalize_bill_filter, PRESETS
 from datetime import timedelta
 from bill_gpio import event_seconds, BillGPIOTrace, BillLevelTrace
 from bill_level_reader import LevelReader
-from bill_process_reader import ProcessLevelReader
+from bill_process_reader import ProcessLevelReader, VendorProcessLevelReader
+from bill_vendor_gpio import VendorSysfsLine
 
 import gpiod
 import yaml
@@ -500,29 +501,37 @@ def bill_filter_reset():
 def nv9_listener(cfg, counter, stop_event):
     bill=cfg['bill_acceptor']
     if bill.get('enabled',True) is False:return
-    chip=gpiod.chip(bill['gpio_chip'],gpiod.chip.OPEN_BY_PATH)
-    line=chip.get_line(bill['gpio_line'])
-    request=gpiod.line_request();request.consumer='sammoy-bill-filter'
-    reader_mode=bill.get('reader','edges')
-    if reader_mode=='level' and os.getenv('IO_BILL_LEVEL_PROCESS')=='1':reader_mode='level-process'
-    if reader_mode not in ('edges','level','level-process'):raise ValueError('Unknown bill GPIO reader')
-    request.request_type=gpiod.line_request.DIRECTION_INPUT if reader_mode in ('level','level-process') else gpiod.line_request.EVENT_BOTH_EDGES
-    if bill.get('gpio_bias')=='pull-up':request.flags=gpiod.line_request.FLAG_BIAS_PULL_UP
-    line.request(request)
-    config=normalize_bill_filter(counter.get_setting('bill_filter',{'active_low':bill.get('active_low',True)}))
-    active=(line.get_value()==0) if config['active_low'] else (line.get_value()!=0)
-    with bill_lock:
-        APP_STATE['bill_line']=line
-        APP_STATE['bill_trace']=BillGPIOTrace()
-        APP_STATE['bill_filter']=BillFilter(config,active,time.monotonic(),counter.get_setting('bill_filter_fault'))
+    vendor = bill.get('source') == 'vendor-sysfs'
+    chip = None
+    reader_mode = bill.get('reader', 'level-process' if vendor else 'edges')
+    if vendor:
+        if reader_mode != 'level-process':
+            raise ValueError('Vendor GPIO requires isolated level-process reader')
+        line = VendorSysfsLine()
+    else:
+        chip=gpiod.chip(bill['gpio_chip'],gpiod.chip.OPEN_BY_PATH)
+        line=chip.get_line(bill['gpio_line'])
+        request=gpiod.line_request();request.consumer='sammoy-bill-filter'
+        if reader_mode=='level' and os.getenv('IO_BILL_LEVEL_PROCESS')=='1':reader_mode='level-process'
+        if reader_mode not in ('edges','level','level-process'):raise ValueError('Unknown bill GPIO reader')
+        request.request_type=gpiod.line_request.DIRECTION_INPUT if reader_mode in ('level','level-process') else gpiod.line_request.EVENT_BOTH_EDGES
+        if bill.get('gpio_bias')=='pull-up':request.flags=gpiod.line_request.FLAG_BIAS_PULL_UP
+        line.request(request)
     reader=None
-    if reader_mode in ('level','level-process'):
-        positive_gap=config['min_gap_ms'] or config['min_pulse_ms']
-        reader_class=ProcessLevelReader if reader_mode=='level-process' else LevelReader
-        reader=reader_class(line,config['active_low'],active,time.monotonic(),min(config['min_pulse_ms'],positive_gap))
-        APP_STATE['bill_trace'].timestamp_source='sampled_monotonic'
-    APP_STATE['bill_reader']=reader
     try:
+        config=normalize_bill_filter(counter.get_setting('bill_filter',{'active_low':bill.get('active_low',True)}))
+        active=(line.get_value()==0) if config['active_low'] else (line.get_value()!=0)
+        with bill_lock:
+            APP_STATE['bill_line']=line
+            APP_STATE['bill_trace']=BillGPIOTrace()
+            APP_STATE['bill_filter']=BillFilter(config,active,time.monotonic(),counter.get_setting('bill_filter_fault'))
+        reader=None
+        if reader_mode in ('level','level-process'):
+            positive_gap=config['min_gap_ms'] or config['min_pulse_ms']
+            reader_class=VendorProcessLevelReader if vendor else (ProcessLevelReader if reader_mode=='level-process' else LevelReader)
+            reader=reader_class(line,config['active_low'],active,time.monotonic(),min(config['min_pulse_ms'],positive_gap))
+            APP_STATE['bill_trace'].timestamp_source='sampled_monotonic'
+        APP_STATE['bill_reader']=reader
         if reader:reader.start()
         print('Bill GPIO filter ready: watching complete pulses; reader='+reader_mode,flush=True)
         while not stop_event.is_set():
@@ -576,7 +585,8 @@ def nv9_listener(cfg, counter, stop_event):
         with bill_lock:
             APP_STATE['bill_line']=None
             APP_STATE['bill_reader']=None
-        line.release();chip.reset()
+        line.release()
+        if chip is not None:chip.reset()
 
 
 def modbus_loop(

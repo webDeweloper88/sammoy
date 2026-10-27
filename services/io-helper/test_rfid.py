@@ -83,3 +83,22 @@ class TargetMetadataTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class HsuRfidIntegrationTests(unittest.TestCase):
+    def test_hsu_transport_preserves_card_metadata_and_closes(self):
+        from unittest.mock import MagicMock
+        reader = RfidReader({'enabled':True,'transport':'hsu','device':'/dev/ttyS9','baud_rate':115200})
+        stop=threading.Event(); device=MagicMock();device.firmware_version=(50,1,6,7)
+        def poll(**kwargs):
+            stop.set()
+            return {'uid':bytes.fromhex('01020304'),'sak':32,'atqa':'0004'}
+        device.read_target_info.side_effect=poll
+        with patch('rfid.LinuxHsuPn532',return_value=device) as factory, patch('rfid.LinuxI2cPn532') as i2c:
+            reader.run(stop)
+        factory.assert_called_once_with('/dev/ttyS9',115200)
+        i2c.assert_not_called();device.close.assert_called_once()
+        event=reader.events_since()['events'][0]
+        self.assertEqual((event['sak'],event['atqa'],event['uid']),(32,'0004','01020304'))
+
+    def test_unknown_transport_does_not_fall_back_to_i2c(self):
+        with self.assertRaises(ValueError):RfidReader({'transport':'typo'})

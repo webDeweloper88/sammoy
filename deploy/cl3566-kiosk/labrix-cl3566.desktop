@@ -1,0 +1,5 @@
+[Desktop Entry]
+Name=LABRIX CL3566 Kiosk
+Comment=Dedicated LABRIX touchscreen session
+Exec=/opt/sammoy/sammoy2/deploy/cl3566-kiosk/session.sh
+Type=Application

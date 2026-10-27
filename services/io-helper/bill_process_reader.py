@@ -32,7 +32,7 @@ def gpio_fd(line):
     return fd
 
 
-def sample(fd, output, active_low, initial_active, gap_limit_ms):
+def sample(fd, output, active_low, initial_active, gap_limit_ms, backend="gpiod", mode_fd=None):
     nice = int(os.getenv('IO_BILL_SAMPLER_NICE', '0'))
     if not -10 <= nice <= 0:raise ValueError('Unsupported sampler priority')
     if nice:
@@ -47,8 +47,14 @@ def sample(fd, output, active_low, initial_active, gap_limit_ms):
     samples = gaps = 0
     maximum = 0.0
     while True:
-        fcntl.ioctl(fd, GET_VALUES, buffer, True)
-        value = buffer[0]
+        if backend == 'vendor-sysfs':
+            from bill_vendor_gpio import read_level
+            value = read_level(fd, mode_fd)
+        elif backend == 'gpiod':
+            fcntl.ioctl(fd, GET_VALUES, buffer, True)
+            value = buffer[0]
+        else:
+            raise ValueError('Unknown bill sampler backend')
         if value not in (0, 1):raise ValueError('Invalid GPIO level')
         now = time.monotonic()
         gap = (now-last)*1000
@@ -79,16 +85,20 @@ class ProcessLevelReader(LevelReader):
         self._child_gaps = 0
         self._started = threading.Event()
 
-    def start(self):
+    def source(self):
         fd = gpio_fd(self.line)
+        return ['--gpio-fd', str(fd)], (fd,)
+
+    def start(self):
+        source_args, source_fds = self.source()
         read_fd, write_fd = os.pipe()
         self._pipe = read_fd
         args = [sys.executable, '-u', str(Path(__file__).resolve()),
-                '--gpio-fd', str(fd), '--stream-fd', str(write_fd),
+                *source_args, '--stream-fd', str(write_fd),
                 '--active-low', str(int(self.active_low)),
                 '--initial-active', str(int(self.previous)), '--gap-ms', str(self.gap_limit_ms)]
         try:
-            self.process = subprocess.Popen(args, pass_fds=(fd, write_fd),
+            self.process = subprocess.Popen(args, pass_fds=(*source_fds, write_fd),
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, close_fds=True)
         except Exception:
@@ -165,13 +175,25 @@ class ProcessLevelReader(LevelReader):
                     'sampler_pid':self.process.pid if self.process else None}
 
 
+class VendorProcessLevelReader(ProcessLevelReader):
+    def source(self):
+        self.line.get_value()  # Verify input mode before spawning.
+        return ['--backend', 'vendor-sysfs', '--gpio-fd', str(self.line.fd),
+                '--mode-fd', str(self.line.mode_fd)], (self.line.fd, self.line.mode_fd)
+
+    def snapshot(self):
+        return {**super().snapshot(), 'source': 'vendor-sysfs', 'logical_io': 5}
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('--backend', choices=('gpiod','vendor-sysfs'), default='gpiod')
+    parser.add_argument('--mode-fd', type=int)
     parser.add_argument('--gpio-fd', type=int, required=True)
     parser.add_argument('--stream-fd', type=int, required=True)
     parser.add_argument('--active-low', type=int, choices=(0,1), required=True)
     parser.add_argument('--initial-active', type=int, choices=(0,1), required=True)
     parser.add_argument('--gap-ms', type=float, required=True)
     args = parser.parse_args()
-    try:sample(args.gpio_fd,args.stream_fd,bool(args.active_low),bool(args.initial_active),args.gap_ms)
+    try:sample(args.gpio_fd,args.stream_fd,bool(args.active_low),bool(args.initial_active),args.gap_ms,args.backend,args.mode_fd)
     except Exception:raise SystemExit(2)

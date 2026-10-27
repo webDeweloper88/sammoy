@@ -45,6 +45,11 @@ if [ "$previous" = dry-fog ]; then
   restore=nfc-relay
   [ ! -f .hardware-profile.before-dry-fog ] || restore=$(cat .hardware-profile.before-dry-fog)
 fi
+# Board and service type are independent; never apply Cubie mounts to CL3566.
+board=$(python3 deploy/board_runtime.py selected)
+if [ "$board" = cl3566-a-e ]; then
+  exec python3 deploy/apply-cl3566-profile.py
+fi
 # Verify config/images before stopping the idle engine.
 if [ "$selected" = dry_fog ]; then
   docker compose -f docker-compose.yml -f docker-compose.nfc-relay.yml -f docker-compose.dry-fog.yml config --quiet

@@ -23,7 +23,8 @@ def apply():
                                   'armedMode', 'requestedOutput', 'walletTransferPending',
                                   'walletCashHeld', 'vipRemainingSeconds')):
         raise RuntimeError('Finish the customer session first')
-    for name in ('/dev/ttyUSB0', '/dev/gpiochip0', '/dev/i2c-7'):
+    from board_runtime import required_nodes
+    for name in required_nodes():
         if not Path(name).is_char_device():
             raise RuntimeError('Required hardware is missing: ' + name)
     subprocess.run(['/bin/sh', str(ROOT / 'deploy/apply-device-profile.sh')], check=True)

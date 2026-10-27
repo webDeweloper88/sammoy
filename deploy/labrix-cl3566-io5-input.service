@@ -1,0 +1,14 @@
+[Unit]
+Description=LABRIX CL3566 IO5 input preparation
+After=systemd-modules-load.service
+Before=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/sammoy/sammoy2/deploy/cl3566-io5-input.py
+ExecStart=/usr/bin/python3 /opt/sammoy/sammoy2/deploy/cl3566-network-compat.py
+RemainAfterExit=yes
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

@@ -51,3 +51,6 @@ apps/kiosk-ui/dist/
 release-artifacts/
 
 .hardware-profile.*
+
+# Host profile rollback snapshot
+.cl3566-map-before-apply.yaml
