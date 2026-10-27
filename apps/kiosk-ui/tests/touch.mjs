@@ -23,6 +23,7 @@ for (const [width,height] of [[1080,1920],[1920,1080]]) {
    } else if(path==='/api/owner/wash/parameters'){
      if(req.method()==='POST')saved=req.postDataJSON().parameters;
      body={ok:true,parameters:saved||live.parameters};
+   } else if(path==='/api/owner/updates/notice'){body={ok:true,available:false};
    } else throw new Error('Unexpected API request '+path);
    await route.fulfill({contentType:'application/json',body:JSON.stringify(body)});
  });

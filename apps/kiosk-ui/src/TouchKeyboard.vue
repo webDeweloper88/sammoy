@@ -1,8 +1,20 @@
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch, useAttrs } from 'vue'
 
+defineOptions({ inheritAttrs: false })
+const attrs = useAttrs()
 const props = defineProps({ language: { type: String, default: 'ru' } })
 const input = shallowRef(null)
+const modal = ref(false), keyboard = ref(null)
+let sizeObserver
+watch(keyboard, element => {
+  sizeObserver?.disconnect()
+  if (!element) return
+  sizeObserver = new ResizeObserver(() => {
+    document.body.style.setProperty('--touch-keyboard-height', element.getBoundingClientRect().height + 'px')
+  })
+  sizeObserver.observe(element)
+})
 const upper = ref(false)
 const symbols = ref(false)
 const alphabet = ref('en')
@@ -47,6 +59,8 @@ function focusInput(event) {
     previousInputMode = target.getAttribute('inputmode')
     target.setAttribute('inputmode', 'none')
   }
+  modal.value = Boolean(target.closest('[role=dialog], [role=alertdialog]'))
+  document.body.classList.toggle('modal-keyboard-open', modal.value)
   document.body.classList.add('keyboard-open')
   nextTick(() => target.scrollIntoView({ block: 'center', behavior: 'auto' }))
 }
@@ -55,7 +69,9 @@ function close() {
   restoreInputMode()
   input.value?.blur()
   input.value = null
-  document.body.classList.remove('keyboard-open')
+  modal.value = false
+  document.body.classList.remove('keyboard-open', 'modal-keyboard-open')
+  document.body.style.removeProperty('--touch-keyboard-height')
 }
 
 function edit(key) {
@@ -85,7 +101,7 @@ function edit(key) {
 function nextField() {
   const target = input.value
   if (!target) return
-  const form = target.closest('form')
+  const form = target.closest('[role=dialog], [role=alertdialog]') || target.closest('form')
   const fields = [...(form || document).querySelectorAll('input:not([type=checkbox]):not([disabled])')]
   const next = fields[fields.indexOf(target) + 1]
   if (next) next.focus()
@@ -99,18 +115,20 @@ onMounted(() => {
   document.addEventListener('focusin', focusInput)
   document.addEventListener('keydown', keydown)
   observer = new MutationObserver(watchRemoval)
-  observer.observe(document.getElementById('app'), { childList: true, subtree: true })
+  observer.observe(document.body, { childList: true, subtree: true })
 })
 onUnmounted(() => {
   close()
   document.removeEventListener('focusin', focusInput)
   document.removeEventListener('keydown', keydown)
   observer?.disconnect()
+  sizeObserver?.disconnect()
 })
 </script>
 
 <template>
-  <section v-if="input" class="touch-keyboard" :class="{ numeric }" :aria-label="t('title')" @pointerdown.prevent>
+  <Teleport to="body" :disabled="!modal">
+  <section v-if="input" ref="keyboard" class="touch-keyboard" :class="[attrs.class, { numeric, 'dialog-keyboard': modal }]" :aria-label="t('title')" @pointerdown.prevent>
     <header><div><strong>{{ t('title') }}</strong><small>{{ fieldLabel }}</small></div><button type="button" class="keyboard-done" @click="close">{{ t('close') }} ✓</button></header>
     <div class="keyboard-keys">
       <div v-for="(row, index) in rows" :key="index" class="keyboard-row">
@@ -127,4 +145,5 @@ onUnmounted(() => {
       <button type="button" @click="nextField">{{ t('next') }} →</button>
     </div>
   </section>
+  </Teleport>
 </template>

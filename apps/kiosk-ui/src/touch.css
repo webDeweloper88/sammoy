@@ -43,3 +43,10 @@ input[type=checkbox] { width: 28px; height: 28px; flex-shrink: 0; }
   .login { padding: 24px; }
   .language button { min-width: 44px; padding: 6px; }
 }
+
+/* Dialog inputs use a keyboard outside the page stacking context. */
+.touch-keyboard.auth-keyboard.dialog-keyboard,
+.touch-keyboard.dialog-keyboard { position:fixed; bottom:16px; left:50%; transform:translateX(-50%); width:min(1180px,calc(100% - 32px)); margin:0; z-index:120; }
+.modal-keyboard-open .confirm-backdrop { bottom:calc(var(--touch-keyboard-height, 520px) + 32px); padding:16px; overflow:auto; }
+.modal-keyboard-open .system-dialog,
+.modal-keyboard-open .confirm-dialog { max-height:calc(100dvh - var(--touch-keyboard-height, 520px) - 64px); overflow:auto; }
