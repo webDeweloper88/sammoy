@@ -22,6 +22,15 @@ class ReleasePreparationTests(unittest.TestCase):
         for number,version,notes in [(0,'v',{'ru':'x','uz':'x','en':'x'}),(1,'bad/path',{'ru':'x','uz':'x','en':'x'}),(1,'v',{'ru':'x'}),(1,'v',{'ru':' ','uz':'x','en':'x'})]:
             with self.subTest(version=version,notes=notes),self.assertRaises(ValueError):w.metadata(number,version,notes)
 
+    def test_selected_services_are_explicit_and_engine_is_required(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root,args=self.fixture(Path(temp));args.plan=True;args.service=['wash-engine','kiosk-ui']
+            output=io.StringIO()
+            with patch.object(w,'source_info',return_value='commit'),redirect_stdout(output):w.prepare(args,root)
+            self.assertEqual(json.loads(output.getvalue())['services'],['wash-engine','kiosk-ui'])
+            args.service=['kiosk-ui']
+            with patch.object(w,'source_info',return_value='commit'),self.assertRaises(ValueError):w.prepare(args,root)
+
     def test_plan_never_builds_or_signs(self):
         with tempfile.TemporaryDirectory() as temp:
             root,args=self.fixture(Path(temp));args.plan=True
