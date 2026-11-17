@@ -78,7 +78,7 @@ def prepare(args,root=ROOT):
         tag='release-'+args.version.lower()+'-'+uuid4().hex[:10]
         for service,context in SERVICES.items():
             image='sammoy2-'+service+':'+tag
-            subprocess.run(docker+['build','--platform','linux/arm64','--label','org.opencontainers.image.revision='+commit,
+            subprocess.run(docker+['build','--network',getattr(args,'build_network','default'),'--platform','linux/arm64','--label','org.opencontainers.image.revision='+commit,
                                   '-t',image,str(source/context)],check=True)
             images[service]=image
         (workspace/'images.json').write_text(json.dumps(images))
@@ -115,6 +115,7 @@ def main():
     parser.add_argument('--private',type=Path,default=ROOT.parent/'ssh/labrix_updates_signing.pem')
     parser.add_argument('--output',type=Path)
     parser.add_argument('--docker-command',default='docker',help='Docker CLI or local privileged wrapper command')
+    parser.add_argument('--build-network',choices=['default','host'],default='default',help='Network used only while building images')
     parser.add_argument('--docker-binary',type=Path,default=Path('/usr/bin/docker'))
     parser.add_argument('--signer-image',default='sammoy2-wash-engine:latest',help='Existing trusted Python image with cryptography')
     parser.add_argument('--hardware-profile',action='append',choices=['cubie-a7a','cl3566-a-e'])
