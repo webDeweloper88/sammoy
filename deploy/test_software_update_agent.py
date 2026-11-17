@@ -12,6 +12,15 @@ spec=importlib.util.spec_from_file_location('software_agent',Path(__file__).with
 a=importlib.util.module_from_spec(spec);spec.loader.exec_module(a)
 
 class AgentTests(unittest.TestCase):
+    def test_cl3566_compose_profile_is_retained(self):
+        info=[{'Config':{'Labels':{'com.docker.compose.project.config_files':str(a.ROOT/'docker-compose.yml')+','+str(a.ROOT/'docker-compose.cl3566.yml')}}}]
+        with patch.object(a,'run',return_value=json.dumps(info).encode()):
+            command=a.compose()
+        self.assertIn(str(a.ROOT/'docker-compose.cl3566.yml'),command)
+    def test_unknown_compose_profile_is_rejected(self):
+        info=[{'Config':{'Labels':{'com.docker.compose.project.config_files':str(a.ROOT/'untrusted.yml')}}}]
+        with patch.object(a,'run',return_value=json.dumps(info).encode()),self.assertRaises(a.UpdateError):a.compose()
+
     def package(self,folder,name,content):
         archive=folder/'test.tar.gz'
         with tarfile.open(archive,'w:gz') as t:
@@ -150,5 +159,5 @@ class SubmissionSafetyTests(unittest.TestCase):
     def test_old_release_cannot_be_installed_as_a_new_update(self):
         with tempfile.TemporaryDirectory() as t:
             folder=Path(t);public=folder/'public';public.write_bytes(b'fixture');hardware=folder/'hardware';hardware.write_text('cubie-a7a');a.atomic(folder/'installed.json',{'release_no':2})
-            with patch.object(a,'STORE',folder),patch.object(a,'PUBLIC',public),patch.object(a,'HARDWARE',hardware),patch.object(a.os,'uname',return_value=Mock(machine='aarch64')),patch.object(a,'verify_release',return_value={'hardware':'cubie-a7a','arch':'aarch64','release_no':1}):
+            with patch.object(a,'STORE',folder),patch.object(a,'PUBLIC',public),patch.object(a,'HARDWARE',hardware),patch.object(a.os,'uname',return_value=Mock(machine='aarch64')),patch.object(a,'verify_release',return_value={'schema':1,'hardware':'cubie-a7a','arch':'aarch64','release_no':1}):
                 with self.assertRaisesRegex(a.UpdateError,'release_not_newer'):a.verify({})

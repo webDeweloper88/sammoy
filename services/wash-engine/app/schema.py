@@ -20,6 +20,8 @@ class UserResponse(BaseModel):
     role: str
     display_name: str
     must_change_password: bool = False
+    auth_method: str = "password"
+    service_card_id: int | None = None
 
 
 class LoginResponse(BaseModel):

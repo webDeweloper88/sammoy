@@ -49,7 +49,7 @@ class WalletSnapshotTests(unittest.TestCase):
         runtime.shared_wallet_enabled = True
         runtime.state.update(creditSum=33000, _creditFloat=33000.0)
         runtime._apply_output_sync = Mock(side_effect=RuntimeError('No OFF acknowledgement'))
-        with patch('app.wallet_post.pending_job', return_value=None):
+        with patch('app.service_access.intercept', return_value=False), patch('app.wallet_post.pending_job', return_value=None):
             with runtime.lock:
                 runtime._apply_rfid_card_locked('507EF458', {'sak': 8, 'atqa': '0400'})
         self.assertIsNone(runtime._wallet_pending_snapshot)

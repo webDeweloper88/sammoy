@@ -20,7 +20,7 @@ const symbols = ref(false)
 const alphabet = ref('en')
 const inputType = ref('')
 const integer = computed(() => input.value?.dataset.keyboard === 'integer')
-const numeric = computed(() => inputType.value === 'number' || integer.value)
+const numeric = computed(() => inputType.value === 'number' || integer.value || input.value?.dataset.keyboard === 'pin')
 const words = {
   ru: { title: 'Экранная клавиатура', close: 'Готово', erase: 'Стереть', clear: 'Очистить', space: 'Пробел', next: 'Далее' },
   uz: { title: 'Ekran klaviaturasi', close: 'Tayyor', erase: 'O‘chirish', clear: 'Tozalash', space: 'Bo‘sh joy', next: 'Keyingi' },
@@ -28,7 +28,7 @@ const words = {
 }
 const t = key => (words[props.language] || words.ru)[key]
 const rows = computed(() => {
-  if (numeric.value) return [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], integer.value?['0']:['.', '0']]
+  if (numeric.value) return [['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], (integer.value || input.value?.dataset.keyboard === 'pin')?['0']:['.', '0']]
   if (symbols.value) return ['1234567890', '!@#$%^&*()', '-_=+[]{}\\|', ';:\'",.<>/?`~'].map(row => [...row])
   const letters = alphabet.value === 'ru'
     ? ['1234567890', 'йцукенгшщзхъ', 'фывапролджэ', 'ячсмитьбюё']
@@ -55,7 +55,7 @@ function focusInput(event) {
     restoreInputMode()
     input.value = target
     inputType.value = target.type
-    if (numeric.value) target.type = 'text'
+    if (numeric.value && inputType.value !== 'password') target.type = 'text'
     previousInputMode = target.getAttribute('inputmode')
     target.setAttribute('inputmode', 'none')
   }

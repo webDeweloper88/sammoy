@@ -1413,6 +1413,8 @@ def startup() -> None:
     open_pool()
     with db() as conn:
         conn.execute(SCHEMA_SQL)
+        from .service_access import SCHEMA_SQL as SERVICE_ACCESS_SCHEMA
+        conn.execute(SERVICE_ACCESS_SCHEMA)
         from .wallet_store import WALLET_SCHEMA_SQL
         conn.execute(WALLET_SCHEMA_SQL)
         from .wallet_post import POST_SCHEMA_SQL
@@ -1594,7 +1596,12 @@ def update_account(
         ).fetchone()
         conn.commit()
 
+    if user.get("auth_method") == "nfc_pin":
+        updated.update(auth_method="nfc_pin", service_card_id=user["service_card_id"])
     token, _jti, expires_at = create_access_token(updated)
+    if updated.get("auth_method") == "nfc_pin":
+        from .service_access import record_session
+        record_session(_jti, updated)
     return {
         "access_token": token,
         "expires_at": expires_at.isoformat(),
@@ -2712,6 +2719,8 @@ def reset_local_runtime_data(
         "system_events",
         "system_state",
         "auth_revoked_tokens",
+        "owner_service_sessions",
+        "owner_service_cards",
         "license_cache",
         "offline_license_codes",
     ]
@@ -4118,3 +4127,6 @@ from .software_updates import router as software_router, agent_router as update_
 app.include_router(software_router)
 app.include_router(update_agent_router)
 app.add_event_handler("startup", ensure_update_worker)
+
+from .service_access import register as register_service_access
+register_service_access(app, wash_runtime)

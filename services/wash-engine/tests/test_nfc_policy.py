@@ -21,7 +21,7 @@ class NfcPolicyTests(unittest.TestCase):
     def test_plain_card_reaches_existing_wallet_without_registration(self):
         runtime = WashRuntime()
         runtime.shared_wallet_enabled = True
-        with patch('app.wallet_post.freeze', side_effect=RuntimeError('test reached wallet')) as freeze, patch('app.wallet_post.pending_job', return_value=None):
+        with patch('app.service_access.intercept', return_value=False), patch('app.wallet_post.freeze', side_effect=RuntimeError('test reached wallet')) as freeze, patch('app.wallet_post.pending_job', return_value=None):
             runtime._apply_rfid_card_locked('01020304', {'sak': 8, 'atqa': '0400'})
         freeze.assert_called_once_with(runtime)
         self.assertNotEqual(runtime.state['lastRfidStatus'], 'nfc_unsupported')

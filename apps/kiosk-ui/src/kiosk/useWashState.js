@@ -13,6 +13,10 @@ export function useWashState(){
   try {
    const data=await api('/api/wash/state',{signal:controller.signal})
    if(version===before&&!busy.value)accept(data)
+   if(data.state?.lastRfidStatus==='service_pin_required'){
+    const challenge=await api('/api/auth/service-challenge',{signal:controller.signal})
+    if(challenge.challenge){sessionStorage.removeItem('sammoy-owner-token');sessionStorage.setItem('sammoy-service-challenge',challenge.challenge);location.replace('/service-login');return}
+   }
   }catch{if(!stopped)receivedAt.value=0}finally{clearTimeout(timeout)}
   if(!stopped&&Date.now()-configAt>1000){
    configAt=Date.now()

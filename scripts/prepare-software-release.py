@@ -92,6 +92,8 @@ def prepare(args,root=ROOT):
             '/work/scripts/build-software-release.py','build','--private','/keys/signing.pem',
             '--output','/release/result','--number',str(args.number),'--version',args.version,
             '--images','/release/images.json','--notes','/release/notes.json']
+        for profile in getattr(args,'hardware_profile',None) or []:command+=['--hardware-profile',profile]
+        for contract in getattr(args,'compatible_db_contract',[]):command+=['--compatible-db-contract',contract]
         # Root signer returns ownership only of generated public artifacts.
         ownership="import pathlib,os;p=pathlib.Path('/release/result');\nif p.exists():\n os.chown(p,"+str(os.getuid())+","+str(os.getgid())+");p.chmod(0o755)\n for f in p.rglob('*'):\n  os.chown(f,"+str(os.getuid())+","+str(os.getgid())+");f.chmod(0o755 if f.is_dir() else 0o644)"
         try:
@@ -115,6 +117,8 @@ def main():
     parser.add_argument('--docker-command',default='docker',help='Docker CLI or local privileged wrapper command')
     parser.add_argument('--docker-binary',type=Path,default=Path('/usr/bin/docker'))
     parser.add_argument('--signer-image',default='sammoy2-wash-engine:latest',help='Existing trusted Python image with cryptography')
+    parser.add_argument('--hardware-profile',action='append',choices=['cubie-a7a','cl3566-a-e'])
+    parser.add_argument('--compatible-db-contract',action='append',default=[])
     parser.add_argument('--plan',action='store_true',help='Validate inputs and show the plan without Docker builds or signing')
     args=parser.parse_args()
     try:

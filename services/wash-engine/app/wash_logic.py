@@ -1546,6 +1546,9 @@ class WashRuntime:
                 or sak & 0x20):
             self.state["lastRfidStatus"] = "nfc_unsupported"
             return
+        from .service_access import intercept
+        if intercept(self, uid):
+            return
         if self.shared_wallet_enabled:
             from .wallet_post import handle_card, pending_job, freeze
             try:

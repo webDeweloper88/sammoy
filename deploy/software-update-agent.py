@@ -20,7 +20,7 @@ import time
 import urllib.request
 from uuid import UUID
 from update_archive import config_references
-from update_protocol import verify_release, canonical, SERVICES, DATABASE_CONTRACT_PROGRAM
+from update_protocol import verify_release, canonical, SERVICES, DATABASE_CONTRACT_PROGRAM, database_transition_allowed, supports_hardware
 
 ROOT=Path('/opt/sammoy/sammoy2')
 STORE=Path('/var/lib/labrix-updates')
@@ -75,7 +75,7 @@ def maintenance(job_id,action):
 def compose():
     info=json.loads(run('docker','inspect','sammoy2-wash-engine'))[0]
     files=info['Config']['Labels']['com.docker.compose.project.config_files'].split(',')
-    allowed={'docker-compose.yml','docker-compose.nfc-relay.yml','docker-compose.dry-fog.yml','docker-compose.relay-only.yml'}
+    allowed={'docker-compose.yml','docker-compose.nfc-relay.yml','docker-compose.dry-fog.yml','docker-compose.relay-only.yml','docker-compose.cl3566.yml','docker-compose.cl3566-fog.yml'}
     if not files or any(Path(f).parent!=ROOT or Path(f).name not in allowed for f in files):raise UpdateError('unsupported_compose_profile')
     return ['docker','compose','-p','sammoy2']+[x for f in files for x in ('-f',f)]
 
@@ -85,7 +85,7 @@ def schema_contract(image):
 def verify(envelope):
     try:m=verify_release(envelope,PUBLIC.read_bytes())
     except (ValueError,OSError):raise UpdateError('invalid_release_signature') from None
-    if not HARDWARE.is_file() or HARDWARE.read_text().strip()!=m['hardware'] or os.uname().machine!=m['arch']:
+    if not HARDWARE.is_file() or not supports_hardware(m,HARDWARE.read_text().strip()) or os.uname().machine!=m['arch']:
         raise UpdateError('incompatible_hardware')
     installed=load(STORE/'installed.json',{})
     if m['release_no']<=installed.get('release_no',0):raise UpdateError('release_not_newer')
@@ -154,7 +154,7 @@ def backup(folder,user,database):
         p=subprocess.run(['docker','exec','-i','sammoy2-postgres','pg_restore','--list'],stdin=f,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,timeout=60)
         if p.returncode:raise UpdateError('database_backup_invalid')
     config=folder/'configuration';config.mkdir(mode=0o700)
-    for name in ('.env','.hardware-profile','docker-compose.yml','docker-compose.nfc-relay.yml','docker-compose.dry-fog.yml','docker-compose.relay-only.yml'):
+    for name in ('.env','.hardware-profile','docker-compose.yml','docker-compose.nfc-relay.yml','docker-compose.dry-fog.yml','docker-compose.relay-only.yml','docker-compose.cl3566.yml','docker-compose.cl3566-fog.yml'):
         p=ROOT/name
         if p.is_file():shutil.copy2(p,config/name);os.chmod(config/name,0o600)
 
@@ -208,7 +208,7 @@ def perform(job):
             if info['Config']['Image']!='sammoy2-'+svc+':latest':raise UpdateError('unsupported_image_tag')
             previous[svc]=info['Image']
         engine=json.loads(run('docker','inspect','sammoy2-wash-engine'))[0]['Image']
-        if schema_contract(engine)!=m['db_contract']:raise UpdateError('database_contract_changed')
+        if not database_transition_allowed(m,schema_contract(engine)):raise UpdateError('database_contract_changed')
         references=config_references(images,set(m['services'].values()))
         run('docker','load','-i',str(images))
         targets={}
@@ -278,9 +278,9 @@ def public_job(job):
 
 def status():
     jobs=sorted(STORE.glob('jobs/*/job.json'),key=lambda p:p.stat().st_mtime,reverse=True)
-    return {'ok':True,'agent_protocol':1,'installed':load(STORE/'installed.json',{'release_no':0,'version':'legacy'}),
+    return {'ok':True,'installed':load(STORE/'installed.json',{'release_no':0,'version':'legacy'}),
             'free_bytes':shutil.disk_usage(STORE).free,'last_job':public_job(load(jobs[0])) if jobs else None,
-            'trusted_key_configured':PUBLIC.is_file(),'hardware':HARDWARE.read_text().strip() if HARDWARE.is_file() else None}
+            'agent_protocol':2,'trusted_key_configured':PUBLIC.is_file(),'hardware':HARDWARE.read_text().strip() if HARDWARE.is_file() else None}
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass

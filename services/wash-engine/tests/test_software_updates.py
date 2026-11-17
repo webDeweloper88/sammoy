@@ -40,6 +40,12 @@ class UpdateQueueTests(unittest.TestCase):
     def test_role_change_stops_queue(self):
         self.c['generation']=8;self.tick(self.normal)
         self.assertEqual(self.q['status'],'needs_review');self.assertEqual(self.calls,[])
+    def test_v2_release_waits_for_installer_upgrade_without_submitting(self):
+        self.q['envelope']={'manifest':{'agent_protocol':2}}
+        self.tick(self.normal)
+        self.assertFalse(any(action=='install' for _,action in self.calls))
+        self.assertTrue(any(p.get('reason')=='installer_upgrade_required' for p in self.q['posts']))
+
     def test_nonprimary_internal_cannot_trigger_install(self):
         with patch.object(u,'agent') as agent,self.assertRaises(HTTPException):u.internal({'action':'install','generation':7},self.c,3)
         agent.assert_not_called()

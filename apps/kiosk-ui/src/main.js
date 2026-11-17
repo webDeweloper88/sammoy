@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 import App from './App.vue'
+import ServiceLogin from './ServiceLogin.vue'
 import InstallPage from './InstallPage.vue'
 import IdlePreview from './kiosk/IdlePreview.vue'
 import WashScreen from './kiosk/WashScreen.vue'
@@ -23,7 +24,7 @@ if (['/', '/wash', '/preview/wash', '/preview/dry-fog'].includes(path)) {
   document.documentElement.classList.add('customer-kiosk')
 }
 
-const root = ['/', '/wash', '/preview/wash', '/preview/dry-fog'].includes(path) ? WashScreen : path === '/preview/idle' ? IdlePreview : path === '/install' ? InstallPage : App
+const root = path === '/service-login' ? ServiceLogin : ['/', '/wash', '/preview/wash', '/preview/dry-fog'].includes(path) ? WashScreen : path === '/preview/idle' ? IdlePreview : path === '/install' ? InstallPage : App
 if(root===App||root===InstallPage)enableManagementScroll()
 async function mount(){
  if(root===WashScreen&&!['/preview/wash','/preview/dry-fog'].includes(path)){

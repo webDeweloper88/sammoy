@@ -87,7 +87,7 @@ def release_current():
     try:
         # One canonical origin: no arbitrary URLs or private credentials in logs.
         with httpx.Client(timeout=10,follow_redirects=False) as client:
-            r=client.get('https://pay.labrix.uz/api/v1/software/latest',params={'site_code':ident['site_code'],'post_no':ident['post_no'],'current':0},headers={'X-Site-Token':ident['site_token']})
+            r=client.get('https://pay.labrix.uz/api/v1/software/latest',params={'site_code':ident['site_code'],'post_no':ident['post_no'],'current':0,'max_schema':2},headers={'X-Site-Token':ident['site_token']})
         r.raise_for_status();envelope=r.json().get('release')
         if envelope:verify_release(envelope,Path('/etc/labrix-updates/signing.pub.pem').read_bytes())
         return envelope
@@ -220,6 +220,8 @@ def tick():
                 value=peer(c,row['post_no'],{'action':'status'})
                 if not value.get('ok') or not value.get('trusted_key_configured'):
                     row['reason']='installer_not_installed';continue
+                if int(value.get('agent_protocol',1)) < q['envelope'].get('manifest',{}).get('agent_protocol',1):
+                    row['reason']='installer_upgrade_required';continue
                 if value.get('installed',{}).get('release_no',0)>=q['release_no']:
                     row['status']='completed';continue
                 if not value.get('ready'):row['reason']='station_busy';continue

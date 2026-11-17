@@ -17,17 +17,27 @@ def canonical(value):
 def validate_manifest(m, now=None):
     keys = {'schema','product','release_no','version','hardware','arch','channel','issued_at','expires_at',
             'notes','artifact','services','db_contract','agent_protocol','wallet_protocol','runtime_contract'}
+    if isinstance(m, dict) and m.get('schema') == 2:
+        keys |= {'hardware_profiles', 'compatible_db_contracts'}
     if not isinstance(m, dict) or set(m) != keys:
         raise ValueError('Invalid release fields')
     if any(type(m[k]) is not int for k in ('schema','agent_protocol','wallet_protocol','runtime_contract')):raise ValueError('Invalid protocol number')
-    if m['schema'] != 1 or m['product'] != 'labrix-wash' or m['agent_protocol'] != 1 or m['wallet_protocol'] != 1 or m['runtime_contract'] != 1:
+    if m['schema'] not in (1, 2) or m['product'] != 'labrix-wash' or m['agent_protocol'] != m['schema'] or m['wallet_protocol'] != 1 or m['runtime_contract'] != 1:
         raise ValueError('Unsupported release protocol')
     if type(m['release_no']) is not int or not 1 <= m['release_no'] <= 2**53-1:
         raise ValueError('Invalid release number')
     if not isinstance(m['version'], str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9.+_-]{0,63}',m['version']):
         raise ValueError('Invalid version')
-    if m['hardware'] != 'cubie-a7a' or m['arch'] != 'aarch64' or m['channel'] != 'stable':
+    if m['arch'] != 'aarch64' or m['channel'] != 'stable':
         raise ValueError('Unsupported hardware/channel')
+    if m['schema'] == 1:
+        if m['hardware'] != 'cubie-a7a':raise ValueError('Unsupported hardware/channel')
+    else:
+        profiles=m['hardware_profiles'];previous=m['compatible_db_contracts']
+        if m['hardware'] != 'linux-arm64' or not isinstance(profiles,list) or not profiles or any(p not in ('cubie-a7a','cl3566-a-e') for p in profiles) or len(set(profiles))!=len(profiles):
+            raise ValueError('Unsupported hardware profiles')
+        if not isinstance(previous,list) or len(previous)>16 or any(not isinstance(v,str) or not SHA.fullmatch(v) for v in previous) or len(set(previous))!=len(previous):
+            raise ValueError('Invalid compatible database contracts')
     now = now or datetime.now(timezone.utc)
     try:
         issued=datetime.fromisoformat(m['issued_at'].replace('Z','+00:00'))
@@ -67,3 +77,11 @@ def verify_release(envelope, public_pem, now=None):
     return validate_manifest(envelope['manifest'],now)
 
 DATABASE_CONTRACT_PROGRAM = "import ast,hashlib,json,pathlib,re\nroot=pathlib.Path('/app/app');items=[]\nfor p in sorted(root.rglob('*.py')):\n for node in ast.walk(ast.parse(p.read_text())):\n  if isinstance(node,ast.Constant) and isinstance(node.value,str) and re.search(r'\\b(?:CREATE|ALTER|DROP|TRUNCATE)\\s+(?:TABLE|INDEX|TYPE|SCHEMA|EXTENSION|FUNCTION|TRIGGER|VIEW)\\b',node.value,re.I):items.append((str(p.relative_to(root)),node.value))\nfor p in sorted(root.rglob('*.sql')):items.append((str(p.relative_to(root)),p.read_text()))\nitems.append(('db.py', (root/'db.py').read_text()))\nprint(hashlib.sha256(json.dumps(sorted(items),sort_keys=True,separators=(',',':')).encode()).hexdigest())\n"
+
+
+def database_transition_allowed(manifest, current_contract):
+    return current_contract == manifest['db_contract'] or (manifest['schema'] == 2 and current_contract in manifest['compatible_db_contracts'])
+
+
+def supports_hardware(manifest, hardware):
+    return hardware in manifest['hardware_profiles'] if manifest['schema'] == 2 else hardware == manifest['hardware']

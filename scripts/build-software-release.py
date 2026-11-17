@@ -23,7 +23,7 @@ def run(*args):return subprocess.check_output(args)
 def main():
  p=argparse.ArgumentParser();subs=p.add_subparsers(dest='command',required=True)
  g=subs.add_parser('keygen');g.add_argument('--private',type=Path,required=True);g.add_argument('--public',type=Path,required=True)
- b=subs.add_parser('build');b.add_argument('--private',type=Path,required=True);b.add_argument('--output',type=Path,required=True);b.add_argument('--number',type=int,required=True);b.add_argument('--version',required=True);b.add_argument('--notes',type=Path,required=True);b.add_argument('--images',type=Path,required=True)
+ b=subs.add_parser('build');b.add_argument('--private',type=Path,required=True);b.add_argument('--output',type=Path,required=True);b.add_argument('--number',type=int,required=True);b.add_argument('--version',required=True);b.add_argument('--notes',type=Path,required=True);b.add_argument('--images',type=Path,required=True);b.add_argument('--hardware-profile',action='append',choices=['cubie-a7a','cl3566-a-e']);b.add_argument('--compatible-db-contract',action='append',default=[])
  a=p.parse_args()
  if a.command=='keygen':
   if a.private.exists() or a.public.exists():raise RuntimeError('Refusing to overwrite signing keys')
@@ -58,6 +58,8 @@ def main():
   for block in iter(lambda:f.read(1024*1024),b''):sha.update(block)
  digest=sha.hexdigest();now=datetime.now(timezone.utc)
  m={'schema':1,'product':'labrix-wash','release_no':a.number,'version':a.version,'hardware':'cubie-a7a','arch':'aarch64','channel':'stable','issued_at':now.isoformat(),'expires_at':(now+timedelta(days=90)).isoformat(),'notes':json.loads(a.notes.read_text()),'artifact':{'url':'https://pay.labrix.uz/api/v1/software/artifacts/'+digest,'sha256':digest,'bytes':archive.stat().st_size,'unpacked_bytes':unpacked,'image_bytes':total},'services':images,'db_contract':contract,'agent_protocol':1,'wallet_protocol':1,'runtime_contract':1}
+ if a.hardware_profile or a.compatible_db_contract:
+  m.update(schema=2,agent_protocol=2,hardware='linux-arm64',hardware_profiles=sorted(set(a.hardware_profile or ['cubie-a7a','cl3566-a-e'])),compatible_db_contracts=sorted(set(a.compatible_db_contract)))
  validate_manifest(m)
  envelope={'manifest':m,'signature':base64.b64encode(key.sign(canonical(m))).decode()}
  archive.rename(a.output/(digest+'.tar.gz'));(a.output/'release.json').write_text(json.dumps(envelope,ensure_ascii=False,indent=2)+'\n')

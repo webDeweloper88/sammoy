@@ -25,7 +25,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 def create_access_token(user: dict[str, Any]) -> tuple[str, str, datetime]:
     now = datetime.now(UTC)
-    expires_at = now + timedelta(minutes=settings.jwt_access_minutes)
+    expires_at = now + timedelta(minutes=10 if user.get("auth_method") == "nfc_pin" else settings.jwt_access_minutes)
     jti = str(uuid4())
     payload = {
         "iss": settings.jwt_issuer,
@@ -34,6 +34,8 @@ def create_access_token(user: dict[str, Any]) -> tuple[str, str, datetime]:
         "role": user["role"],
         "login": user["login"],
         "auth_version": int(user.get("auth_version") or 1),
+        "auth_method": user.get("auth_method", "password"),
+        "service_card_id": user.get("service_card_id"),
         "iat": int(now.timestamp()),
         "exp": int(expires_at.timestamp()),
     }

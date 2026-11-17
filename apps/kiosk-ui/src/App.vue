@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { api, changePassword, getParameters, login, me, saveParameters } from './api'
+import OwnerConfirmation from './OwnerConfirmation.vue'
 import TouchKeyboard from './TouchKeyboard.vue'
 import OwnerPages from './OwnerPages.vue'
 import SoftwareUpdates from './SoftwareUpdates.vue'
@@ -126,6 +127,7 @@ async function signIn() {
   error.value = ''
   try {
     const result = await login(credentials.login.trim(), credentials.password)
+    sessionStorage.removeItem('sammoy-service-session')
     if (!['owner', 'admin'].includes(result.user?.role)) throw new Error('Owner/Admin access required')
     account.value = result.user
     token.value = result.access_token
@@ -177,12 +179,13 @@ async function signOut() {
   showPasswords.value = false
   credentials.password = ''
   sessionStorage.removeItem('sammoy-owner-token')
+  sessionStorage.removeItem('sammoy-service-session')
   window.history.replaceState(null, '', '/login')
   nextTick(() => loginInput.value?.focus())
   if(oldToken) { try { await api('/api/auth/logout',{token:oldToken,method:'POST',signal:AbortSignal.timeout(3000)}) } catch {} }
 }
 
-window.addEventListener('sammoy-session-expired', () => { signOut(); error.value = language.value === 'ru' ? 'Сеанс истёк. Войдите снова.' : 'Session expired. Sign in again.' })
+window.addEventListener('sammoy-session-expired', () => { if(account.value?.auth_method==='nfc_pin'||sessionStorage.getItem('sammoy-service-session')){returnToStation();return} signOut(); error.value = language.value === 'ru' ? 'Сеанс истёк. Войдите снова.' : 'Session expired. Sign in again.' })
 
 function validNumber(value, min = 0) {
   return typeof value === 'number' && Number.isFinite(value) && value >= min
@@ -222,6 +225,9 @@ function rate(tariff) {
   return duration > 0 ? Math.round(amount * 60 / duration).toLocaleString() : '—'
 }
 
+let lastInteraction=Date.now()
+for(const event of ['pointerdown','keydown'])window.addEventListener(event,()=>{lastInteraction=Date.now()},{passive:true})
+setInterval(()=>{if(account.value?.auth_method==='nfc_pin' && Date.now()-lastInteraction>90000)returnToStation()},1000)
 onMounted(async () => {
   if (!token.value) {
     window.history.replaceState(null, '', '/login')
@@ -242,6 +248,7 @@ onMounted(async () => {
 </script>
 
 <template>
+  <OwnerConfirmation :language="language" />
   <main class="shell" :class="{ 'access-shell': !token || passwordChangeRequired }">
     <header class="topbar">
       <div class="brand"><strong>Labrixwash</strong><span>{{ t('console') }}</span></div>

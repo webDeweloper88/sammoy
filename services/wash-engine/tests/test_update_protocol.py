@@ -32,3 +32,25 @@ class ReleaseProtocolTests(unittest.TestCase):
         m=deepcopy(self.m);m['services']['postgres']='sha256:'+'d'*64;variants.append(m)
         for m in variants:
             with self.subTest(manifest=m),self.assertRaises(ValueError):verify_release(self.envelope(m),self.public)
+
+    def v2(self):
+        m=deepcopy(self.m)
+        m.update(schema=2,agent_protocol=2,hardware='linux-arm64',hardware_profiles=['cubie-a7a','cl3566-a-e'],compatible_db_contracts=['d'*64])
+        return m
+    def test_v2_signed_hardware_and_explicit_database_transition(self):
+        from app.update_protocol import database_transition_allowed,supports_hardware
+        m=self.v2();self.assertEqual(verify_release(self.envelope(m),self.public),m)
+        self.assertTrue(supports_hardware(m,'cl3566-a-e'))
+        self.assertTrue(supports_hardware(m,'cubie-a7a'))
+        self.assertFalse(supports_hardware(m,'unconfirmed-rk3566'))
+        self.assertTrue(database_transition_allowed(m,'d'*64))
+        self.assertTrue(database_transition_allowed(m,'c'*64))
+        self.assertFalse(database_transition_allowed(m,'e'*64))
+        self.assertFalse(database_transition_allowed(self.m,'d'*64))
+    def test_v2_fields_cannot_be_added_or_changed_after_signing(self):
+        e=self.envelope(self.v2());e['manifest']['compatible_db_contracts'].append('e'*64)
+        with self.assertRaises(ValueError):verify_release(e,self.public)
+    def test_v2_rejects_unknown_profiles_and_unbounded_transitions(self):
+        for field,value in [('hardware_profiles',['other-board']),('hardware_profiles',[]),('compatible_db_contracts',['bad-hash']),('compatible_db_contracts',['d'*64]*17),('agent_protocol',1)]:
+            m=self.v2();m[field]=value
+            with self.subTest(field=field),self.assertRaises(ValueError):verify_release(self.envelope(m),self.public)
