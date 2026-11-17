@@ -64,7 +64,10 @@ def prepare(args,root=ROOT):
     if output.is_relative_to(root):raise ValueError('Keep generated releases outside the Git repository')
     docker=shlex.split(args.docker_command)
     if not docker:raise ValueError('Docker command is empty')
-    plan={'release_no':args.number,'version':args.version,'commit':commit,'services':list(SERVICES),
+    selected=getattr(args,'service',None) or list(SERVICES)
+    if 'wash-engine' not in selected:raise ValueError('wash-engine is required to verify the database contract')
+    selected=list(dict.fromkeys(selected))
+    plan={'release_no':args.number,'version':args.version,'commit':commit,'services':selected,
           'output':str(output),'notes':notes,'publishes':False,'changes_running_stations':False}
     print(json.dumps(plan,ensure_ascii=False,indent=2),flush=True)
     if args.plan:return
@@ -76,7 +79,8 @@ def prepare(args,root=ROOT):
     with tempfile.TemporaryDirectory(prefix='labrix-release-',dir=output.parent) as temp:
         workspace=Path(temp);source=export_source(root,workspace);images={}
         tag='release-'+args.version.lower()+'-'+uuid4().hex[:10]
-        for service,context in SERVICES.items():
+        for service in selected:
+            context=SERVICES[service]
             image='sammoy2-'+service+':'+tag
             subprocess.run(docker+['build','--network',getattr(args,'build_network','default'),'--platform','linux/arm64','--label','org.opencontainers.image.revision='+commit,
                                   '-t',image,str(source/context)],check=True)
@@ -118,6 +122,7 @@ def main():
     parser.add_argument('--build-network',choices=['default','host'],default='default',help='Network used only while building images')
     parser.add_argument('--docker-binary',type=Path,default=Path('/usr/bin/docker'))
     parser.add_argument('--signer-image',default='sammoy2-wash-engine:latest',help='Existing trusted Python image with cryptography')
+    parser.add_argument('--service',action='append',choices=list(SERVICES),help='Build only selected application services; default is all')
     parser.add_argument('--hardware-profile',action='append',choices=['cubie-a7a','cl3566-a-e'])
     parser.add_argument('--compatible-db-contract',action='append',default=[])
     parser.add_argument('--plan',action='store_true',help='Validate inputs and show the plan without Docker builds or signing')
