@@ -257,6 +257,9 @@ class WashRuntime:
             "lastRfidProcessedAt": None,
             "lastIoOk": False,
             "lastError": None,
+            "hardwareErrorCode": None,
+            "hardwareWarnings": [],
+            "nfcReady": False,
 
             # Power-loss recovery state
             "powerRecoveryAvailable": False,
@@ -818,9 +821,8 @@ class WashRuntime:
             try:
                 self.tick()
             except Exception as exc:
-                print(f"WASH I/O ERROR: {exc}", flush=True)
                 with self.lock:
-                    self._io_fault(str(exc))
+                    self._io_fault(exc)
                 self._all_off_sync()
 
     def tick(self) -> None:
@@ -844,7 +846,12 @@ class WashRuntime:
         elapsed = max(0.0, now - self.last_tick)
         self.last_tick = now
 
-        io = self._get_io_sync()
+        try:
+            io = self._get_io_sync()
+        except Exception as exc:
+            self._io_fault(exc)
+            self._all_off_sync()
+            raise
         from .io_safety import validate_io
         try:
             validate_io(io,self.last_output,self.device_type)
@@ -857,10 +864,17 @@ class WashRuntime:
                 from .cash_ingest import capture
                 capture(self, io, recover=True)
             finally:
-                self._io_fault(str(exc));self._all_off_sync()
+                self._io_fault(exc);self._all_off_sync()
             raise
         from .cash_ingest import capture
-        capture(self, io, recover=getattr(self,"_nv9_startup_pending",True))
+        try:
+            capture(self, io, recover=getattr(self,"_nv9_startup_pending",True))
+        except Exception as exc:
+            from .hardware_status import HardwareFault
+            fault = HardwareFault('payment_accounting_error', str(exc))
+            self._io_fault(fault)
+            self._all_off_sync()
+            raise fault from exc
         self._nv9_startup_pending = False
         try:
             rfid_payload = self._get_rfid_events_sync(since=self.last_rfid_seq)
@@ -913,12 +927,16 @@ class WashRuntime:
 
         with self.lock:
             self.io_failures = 0
+            from .hardware_status import peripheral_status
+            status = peripheral_status(io, rfid_payload)
+            previous = (self.state.get('hardwareErrorCode'), self.state.get('hardwareWarnings', []))
+            current = (None, status['hardwareWarnings'])
+            if previous != current:
+                print(f"HARDWARE STATUS {now_iso()}: error=None warnings={current[1]}", flush=True)
+            self.state.update(status)
             self.state["lastIoOk"] = True
             self.state["lastError"] = None
-            bill_filter=io.get('bill_filter')
-            if isinstance(bill_filter,dict):
-                self.state['billInputReady']=bool(io.get('nv9_enabled') and io.get('nv9_listener_alive') and bill_filter.get('ready'))
-                self.state['billInputFault']=bill_filter.get('fault')
+            self.state['hardwareErrorCode'] = None
 
 
             bill_delta = 0 if io.get("nv9_stream_id") else max(0, bill_pulses - self.last_bill_pulses)
@@ -2787,7 +2805,13 @@ class WashRuntime:
         return remaining, chargeable_elapsed
 
     def _io_fault(self,message):
+        from .hardware_status import critical_code
+        code = critical_code(message)
+        message = str(message)
         with self.lock:
+            if self.state.get('hardwareErrorCode') != code:
+                print(f"HARDWARE FAULT {now_iso()}: code={code} detail={message}", flush=True)
+            self.state['hardwareErrorCode'] = code
             self.physical_buttons.reset()
             self._purge_idle_since = time.monotonic()
             self._purge_until = None
@@ -2809,14 +2833,17 @@ class WashRuntime:
                 if not isinstance(payload.get("inputs"), dict) or not payload.get("nv9_stream_id"):
                     raise RuntimeError("Durable native I/O protocol is required")
                 return payload
-        except Exception:
+        except Exception as exc:
             with self.lock:
                 self.io_failures += 1
                 self.state["lastIoOk"] = False
-            raise
+            from .hardware_status import HardwareFault
+            code = 'io_protocol_error' if isinstance(exc, (RuntimeError, ValueError, AttributeError)) else 'io_helper_unavailable'
+            raise HardwareFault(code, str(exc)) from exc
 
     def _get_rfid_events_sync(self, since: int | None = None) -> dict[str, Any]:
-        with sync_client(scope='io',timeout=2.0) as client:
+        # A slow optional peripheral must not exhaust the 2-second control lease.
+        with sync_client(scope='rfid',timeout=0.25) as client:
             response = client.get(
                 f"{settings.io_helper_url}/rfid/events",
                 params={"since": int(since or 0), "limit": 1000},
@@ -2854,10 +2881,11 @@ class WashRuntime:
                     if response.json().get("actual") is not True:
                         raise RuntimeError("ON readback not confirmed")
             self.last_output = output
-        except Exception:
+        except Exception as exc:
             self.last_output = None
             self._all_off_sync()
-            raise
+            from .hardware_status import HardwareFault
+            raise HardwareFault('output_confirmation_failed', str(exc)) from exc
 
     def _all_off_sync(self) -> bool:
         errors=[]

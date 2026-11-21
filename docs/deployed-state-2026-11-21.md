@@ -55,3 +55,9 @@
 Подробности: `docs/physical-buttons.md`, `docs/license-lifecycle.md`; серверная часть — labrixpay `docs/POST_LIFECYCLE.ru.md`.
 
 Обновление 21.11.2026 11:57: NO на IN2 подтверждён фактическим `/configuration` обеих плат (`active_low=false`, debounce 40 мс). При raw=0 оба runtime показывают `totalStopActive=false`, I/O исправен, режимы не взведены, OFF подтверждён. Переход не изменял настройку `triggerGraceSeconds=1` и не включал выходы для физического теста.
+
+## Hardware fault classification update (21 November, afternoon)
+
+Engine/UI `errors-20261121` add specific critical errors and noncritical NFC/cash warnings. Radxa8 updated with 9,442 sum preserved, all outputs OFF, no mode automatically restored. PN532 I2C failure is currently reported as a warning. See `hardware-errors.md` for behavior and test scope. The helper/configuration were not replaced. Watchdog audit is in `watchdog-audit-2026-11-21.md`; no host-hang reboot or energized relay watchdog test was performed.
+
+CL26 post1 updated to the same errors-20261121 engine/UI images: 0 sum, no warnings, NFC/cash ready, I/O healthy, eight outputs OFF. Both hosts serve UI index-DZI64OEr.js / index-Bz7X80c-.css. Golden images and signed OTA catalog were not rebuilt.

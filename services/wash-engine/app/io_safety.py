@@ -15,7 +15,6 @@ def validate_io(io,last_output=None,device_type="wash"):
     if not isinstance(io.get('inputs'),dict):
         if io.get('modbus_ok') is False:raise RuntimeError('Modbus is unavailable')
         return
-    if io.get('nv9_enabled') is not False and io.get('nv9_listener_alive') is False:raise RuntimeError('NV9 listener is not running')
     if io.get('modbus_ok') is not True:raise RuntimeError('Modbus is unavailable')
     age=io.get('poll_age_seconds')
     if age is None:

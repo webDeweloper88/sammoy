@@ -1,4 +1,5 @@
 <script setup>
+import {hardwareErrorText,hardwareWarningTexts} from './hardware-feedback.js'
 import {dryFogIds,dryFogAdditional,dryFogLabels,dryFogDescriptions,dryFogTones,dryFogTexts} from './dry-fog.js'
 import { walletErrorText } from './card-feedback.js'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
@@ -50,7 +51,7 @@ const statusText=computed(()=>{
  if(s?.licenseLocked)return t.value.locked
  if(s?.licenseRetirementPending)return t.value.licenseRetiring
  if(s?.walletTransferPending)return s.walletOperationInProgress ? t.value.walletProcessing : t.value.walletPending
- if(!ready.value)return t.value.hardware
+ if(!ready.value)return hardwareErrorText(s,t.value)
  if(error.value)return t.value.failed
  if(s?.purgeActive)return t.value.purgeRunning
  if(s?.walletCashHeld>0)return t.value.cashHeld+' · '+Number(s.walletCashHeld).toLocaleString('ru-RU')+' so‘m'
@@ -73,6 +74,7 @@ const statusText=computed(()=>{
  if(selected.value)return t.value.trigger
  return credit.value>0?t.value.choose:t.value.addMoney
 })
+const hardwareWarnings=computed(()=>fresh.value?hardwareWarningTexts(state.value,t.value):[])
 const timerLabel=computed(()=>state.value?.displayTimeKind==='free_pause'?t.value.freePause:state.value?.displayTimeKind==='paid_pause'?t.value.paidPause:t.value.time)
 const time=computed(()=>{
  const n=state.value?.remainingSeconds
@@ -153,10 +155,13 @@ watch(idleVisible, v=>{if(v)language.value=defaultLanguage(config.value)})
 
    <div class="status-secondary"><span>{{ timePrimary?t.balance:timerLabel }}</span><div><WashIcon :name="timePrimary?'coins':'clock'"/><strong>{{ timePrimary?balance:time }}</strong><small v-if="timePrimary&&!isVip">so‘m</small></div>   <p v-if="timePrimary&&!isVip&&fresh&&state?.bonusSum>0" class="bonus-caption">{{ language==='ru'?'Включая бонус':language==='kz'?'Бонус қоса есептелген':language==='ky'?'Бонус кошулган':'Shu jumladan bonus' }} {{ Number(state.bonusSum).toLocaleString('ru-RU') }} so‘m</p></div>
   </section>
+  <div class="wash-programs">
+  <div v-if="hardwareWarnings.length" class="hardware-warnings" role="status"><p v-for="warning in hardwareWarnings" :key="warning">⚠ {{warning}}</p></div>
   <ProgramCards :pause-enabled="!dryFog||parameters?.pauseEnabled!==false||manualPause" v-if="design==='cards'" :programs="mainPrograms" :selected="selected" :active="running" :disabled="!ready" :t="t" :heading="dryFog?t.aromaHeading:undefined" :language="language" :pause-state="pauseVisual" :center-label="!selected&&!(credit>0)?t.addMoney:centerLabel" :center-sub="cardCenterSub" :center-icon="!selected?(credit>0?'water':'wallet'):manualPause?'play':'pause'" :center-disabled="centerDisabled" @select="choose" @center="center"/>
   <section v-else class="wash-wheel-area">
    <ProgramWheel :running-label="t.runningBadge" :theme="appearance" :programs="mainPrograms" :selected="selected" :active="running" :pause-state="pauseVisual" :disabled="!ready" :center-label="centerLabel" :center-sub="centerSub" :center-icon="manualPause||!selected?'play':'pause'" :center-disabled="centerDisabled" @select="choose" @center="center"/>
   </section>
+  </div>
   <section v-if="optionalPrograms.length" class="wash-optional" :class="{'has-running-extra':dryFog&&running&&optionalPrograms.some(p=>p.id===selected)}">
    <h2>{{ t.optional }}</h2>
    <div><button v-for="p in optionalPrograms" :key="p.id" :data-program="p.id" :class="{selected:selected===p.id,running:running&&selected===p.id}" :style="{'--optional-tone':(dryFog?dryFogTones:appearance==='light'?lightTones:darkActiveTones)[p.id],'--optional-ink':programInk(appearance,p.id)}" :aria-label="p.label" :aria-pressed="selected===p.id" :disabled="!ready" @click="choose(p.id)"><img v-if="design==='cards'" class="mode-photo" :src="modePhoto(p.id)" alt="" decoding="async"/><WashIcon :name="p.id"/><span><strong :class="{'long-name':p.label.length>10}">{{ p.label }}</strong><small v-if="dryFog&&running&&selected===p.id" class="extra-active-badge"><span aria-hidden="true">✓</span> {{t.runningBadge}}</small><small v-else>{{ design==='cards' && selected===p.id ? (running?t.running:t.trigger) : p.description }}</small></span><b v-if="design!=='cards'" aria-hidden="true">{{selected===p.id?'✓':'+'}}</b><span v-else-if="running&&selected===p.id" class="mode-running-dot" aria-hidden="true"></span></button></div>

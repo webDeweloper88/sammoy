@@ -1,6 +1,17 @@
 import { idleTexts } from './idle-texts.js'
 // Same customer language keys as IdleScreen and Owner's kiosk settings.
 const rows = {
+ ioConnectionLost:["Boshqaruv moduli bilan aloqa uzildi. Ish to‘xtatildi.", "Басқару модулімен байланыс үзілді. Жұмыс тоқтатылды.", "Башкаруу модулу менен байланыш үзүлдү. Иш токтотулду.", "Потеряна связь с модулем управления. Работа остановлена."],
+ ioHelperUnavailable:["Boshqaruv xizmati bilan aloqa yo‘q. Ish to‘xtatildi.", "Басқару қызметімен байланыс жоқ. Жұмыс тоқтатылды.", "Башкаруу кызматы менен байланыш жок. Иш токтотулду.", "Нет связи со службой управления. Работа остановлена."],
+ ioDataStale:["Uskunadan yangi ma’lumot kelmayapti. Ish to‘xtatildi.", "Жабдықтан жаңа деректер келмейді. Жұмыс тоқтатылды.", "Жабдуудан жаңы маалымат келбей жатат. Иш токтотулду.", "Нет свежих данных от оборудования. Работа остановлена."],
+ outputConfirmationFailed:["Uskuna chiqishlari holati tasdiqlanmadi. Operatorni chaqiring.", "Жабдық шығыстарының күйі расталмады. Операторды шақырыңыз.", "Жабдуунун чыгыштарынын абалы ырасталган жок. Операторду чакырыңыз.", "Состояние выходов не подтверждено. Обратитесь к оператору."],
+ controllerSafetyStop:["Himoya ishga tushdi. Dasturni qayta tanlang.", "Қорғаныс іске қосылды. Бағдарламаны қайта таңдаңыз.", "Коргоо иштеди. Программаны кайра тандаңыз.", "Сработала защита управления. Повторно выберите режим."],
+ ioProtocolError:["Uskuna sozlamalari yoki javobi noto‘g‘ri. Operatorni chaqiring.", "Жабдық баптаулары немесе жауабы қате. Операторды шақырыңыз.", "Жабдуунун жөндөөлөрү же жообу туура эмес. Операторду чакырыңыз.", "Ошибка настроек или ответа оборудования. Обратитесь к оператору."],
+ paymentAccountingError:["To‘lov hisobini tekshirish kerak. Operatorni chaqiring.", "Төлем есебін тексеру қажет. Операторды шақырыңыз.", "Төлөм эсебин текшерүү керек. Операторду чакырыңыз.", "Требуется проверка учёта оплаты. Обратитесь к оператору."],
+ controlError:["Boshqaruvda xatolik. Ish to‘xtatildi. Operatorni chaqiring.", "Басқару қатесі. Жұмыс тоқтатылды. Операторды шақырыңыз.", "Башкарууда ката. Иш токтотулду. Операторду чакырыңыз.", "Ошибка управления. Работа остановлена. Обратитесь к оператору."],
+ nfcUnavailable:["NFC vaqtincha ishlamayapti. Karta orqali to‘lov mavjud emas.", "NFC уақытша істемейді. Картамен төлеу қолжетімсіз.", "NFC убактылуу иштебейт. Карта менен төлөө жеткиликсиз.", "NFC временно недоступен. Оплата картой не работает."],
+ cashWarning:["Naqd pul qabul qilish vaqtincha mavjud emas.", "Қолма-қол ақша қабылдау уақытша қолжетімсіз.", "Нак акча кабыл алуу убактылуу жеткиликсиз.", "Приём наличных временно недоступен."],
+
  licenseRetiring:['Post yopilmoqda. Yangi to‘lov qabul qilinmaydi; to‘langan seansni yakunlang.','Пост жабылуда. Жаңа төлем қабылданбайды; төленген сеансты аяқтаңыз.','Пост жабылууда. Жаңы төлөм кабыл алынбайт; төлөнгөн сеансты бүтүрүңүз.','Пост выводится из работы. Новые оплаты недоступны; завершите оплаченный сеанс.'],
  noInternet:['Internet aloqasi yo‘q','Интернет байланысы жоқ','Интернет байланышы жок','Нет подключения к интернету'],
  vipDeviceNotAllowed:['Bu VIP karta ushbu xizmat uchun yoqilmagan. Boshqa to‘lov usulini tanlang.','Бұл VIP карта осы қызметке қосылмаған. Басқа төлем тәсілін таңдаңыз.','Бул VIP карта бул кызмат үчүн иштетилген эмес. Башка төлөм ыкмасын тандаңыз.','Эта VIP-карта недоступна для данной услуги. Выберите другой способ оплаты.'],

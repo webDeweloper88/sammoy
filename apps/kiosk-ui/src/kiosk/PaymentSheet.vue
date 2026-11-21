@@ -1,4 +1,5 @@
 <script setup>
+import {hardwareErrorText} from './hardware-feedback.js'
 import { editPaymentAmount } from './payment-amount.js'
 import { walletErrorText } from './card-feedback.js'
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
@@ -81,14 +82,14 @@ onUnmounted(()=>{stopped=true;clearTimeout(timer);clearTimeout(successTimer)})
    <div v-if="!method" class="payment-methods">
     <button class="payment-method payment-method-cash" :aria-label="t.cash" :disabled="!ready||isVip||state?.billInputReady===false" @click="method='cash'"><WashIcon name="cash"/><span><strong>{{ t.cash }}</strong><small>{{ isVip?t.vipPaymentBlocked:state?.billInputReady===false?t.cashUnavailable:ready?t.cashShort:t.unavailable }}</small></span><b aria-hidden="true">›</b></button>
     <button class="payment-method payment-method-qr" :aria-label="t.qr" :disabled="!clickReady&&!pending" @click="method='qr'"><WashIcon name="qr"/><span><strong>{{ t.qr }}</strong><small>{{ pending?t.pendingQr:isVip?t.vipPaymentBlocked:clickReady?'Click':options?.click?.enabled&&state?.internetOnline===false?t.noInternet:t.unavailable }}</small></span><b aria-hidden="true">›</b></button>
-    <button class="payment-method payment-method-card" :aria-label="t.card" :disabled="!ready || state?.lastRfidStatus==='offline' || state?.lastRfidStatus==='not_checked'" @click="method='card'"><WashIcon name="card"/><span><strong>{{ t.card }}</strong><small>{{ t.cardShort }}</small></span><b aria-hidden="true">›</b></button>
+    <button class="payment-method payment-method-card" :aria-label="t.card" :disabled="!ready || state?.nfcReady===false || state?.lastRfidStatus==='offline' || state?.lastRfidStatus==='not_checked'" @click="method='card'"><WashIcon name="card"/><span><strong>{{ t.card }}</strong><small>{{state?.nfcReady===false?t.nfcUnavailable:t.cardShort}}</small></span><b aria-hidden="true">›</b></button>
    </div>
    <template v-else-if="method==='cash'||method==='card'">
     <WashIcon class="payment-large-icon" :name="method"/>
-    <h3>{{ t[method] }}</h3><p>{{ method==='cash'?(state?.billInputReady===false?t.cashUnavailable:t.cashHint):(state?.creditSum>0?t.cardSave:t.cardHint) }}</p>
+    <h3>{{ t[method] }}</h3><p>{{ method==='cash'?(state?.billInputReady===false?t.cashUnavailable:t.cashHint):(state?.nfcReady===false?t.nfcUnavailable:state?.creditSum>0?t.cardSave:t.cardHint) }}</p>
     <p v-if="method==='card' && cardResult" role="status">{{ cardResult==='nfc_unsupported'?t.nfcUnsupported:cardResult==='wallet_error'?walletErrorText(state,t):cardResult==='bonus_not_available_for_device'?t.bonusNotForDevice:cardResult==='card_in_use'?t.cardInUse:cardResult==='vip_granted'?t.vipGranted:cardResult==='customer_balance_used'?t.cardLoaded:cardResult==='customer_balance_saved'?t.cardSaved:['vip_remaining_burned','vip_session_closed'].includes(cardResult)?t.cardClosed:t.cardRejected }}</p>
     <button v-if="preview" class="sheet-action" @click="emit('preview-credit',5000);emit('close')">Тест: +5 000 so‘m</button>
-    <p v-if="!ready" class="payment-error">{{ t.hardware }}</p>
+    <p v-if="!ready" class="payment-error">{{hardwareErrorText(state,t)}}</p>
    </template>
    <template v-else>
     <template v-if="uncertain"><p role="alert" class="payment-error">{{ busy?t.processing:t.qrUnknown }}</p></template>

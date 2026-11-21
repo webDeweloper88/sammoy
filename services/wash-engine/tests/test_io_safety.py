@@ -82,7 +82,8 @@ class IoSafetyTests(unittest.TestCase):
 
     def test_explicitly_absent_bill_acceptor_does_not_disable_modbus_proof(self):
         validate_io({**self.io(),'nv9_enabled':False,'nv9_listener_alive':False})
-        for change in ({'nv9_enabled':True},{'nv9_enabled':0},{'modbus_ok':False},{'poll_age_seconds':3}):
+        validate_io({**self.io(),'nv9_enabled':True,'nv9_listener_alive':False})
+        validate_io({**self.io(),'nv9_listener_alive':False})
+        for change in ({'modbus_ok':False},{'poll_age_seconds':3}):
             with self.subTest(change=change),self.assertRaises(RuntimeError):
-                validate_io({**self.io(),'nv9_enabled':False,'nv9_listener_alive':False,**change})
-        with self.assertRaises(RuntimeError):validate_io({**self.io(),'nv9_listener_alive':False})
+                validate_io({**self.io(),'nv9_listener_alive':False,**change})
