@@ -17,3 +17,16 @@ class ContainerDnsTests(unittest.TestCase):
         self.assertEqual(m.daemon_configuration(updated,'172.17.0.1'),updated)
     def test_does_not_replace_operator_dns(self):
         with self.assertRaises(RuntimeError):m.daemon_configuration({'dns':['10.0.0.1']},'172.17.0.1')
+
+    def test_missing_resolver_is_reported_before_installation(self):
+        from unittest.mock import patch
+        with patch.object(m.subprocess,'check_output',return_value='not-found\n'):
+            with self.assertRaisesRegex(RuntimeError,'Install systemd-resolved'):
+                m.require_resolver()
+
+    def test_refresh_can_restart_resolver_without_stopping_itself(self):
+        import configparser
+        unit=configparser.ConfigParser();unit.read_string(m.UNIT)
+        self.assertIn('systemd-resolved.service',unit['Unit']['Wants'].split())
+        self.assertNotIn('systemd-resolved.service',unit['Unit']['Requires'].split())
+        self.assertIn('docker.service',unit['Unit']['Requires'].split())
