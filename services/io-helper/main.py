@@ -19,7 +19,7 @@ from button_events import ButtonEvents
 import yaml
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pymodbus.client import ModbusSerialClient
 from rfid import RfidReader
 
@@ -28,6 +28,7 @@ CONFIG_FILE = os.getenv("IO_CONFIG", "/config/io-map.yaml")
 
 app = FastAPI(title="SAMMOY 2.0 io-helper")
 
+input_lock = threading.RLock()
 state_lock = threading.Lock()
 bill_lock = threading.RLock()
 output_test = OutputTest()
@@ -406,6 +407,51 @@ def configuration():
             "nv9_listener_alive": bool(APP_STATE.get("nv9_thread") and APP_STATE["nv9_thread"].is_alive())}
 
 
+class InputPolarityRequest(BaseModel):
+    active_low: bool = Field(strict=True)
+
+
+def restore_input_polarity(cfg, journal):
+    saved = journal.get_setting('io_input_polarity')
+    signature = [[i['name'], i['address']] for i in cfg['inputs']]
+    if (cfg.get('device_type', 'wash') == 'wash' and saved
+            and saved.get('inputs') == signature and type(saved.get('active_low')) is bool):
+        for item in cfg['inputs']:item['active_low'] = saved['active_low']
+
+
+@app.post('/inputs/polarity')
+def input_polarity(payload: InputPolarityRequest):
+    controller = APP_STATE['controller']
+    with input_lock, output_test.lock:
+        if controller.cfg.get('device_type', 'wash') != 'wash':
+            raise HTTPException(409, 'Input polarity is available for wash stations only')
+        rows = controller.cfg['inputs']
+        if len(rows) != 8 or {i['address'] for i in rows} != set(range(8)):
+            raise HTTPException(409, 'An eight-input wash profile is required')
+        with state_lock:
+            fresh = (io_state['modbus_ok'] and io_state['last_poll_monotonic'] is not None
+                     and time.monotonic() - io_state['last_poll_monotonic'] < 2)
+        if not fresh or output_test.active:
+            raise HTTPException(409, 'Fresh Modbus data and no output test required')
+        try:
+            actual = controller.read_outputs()
+            if len(actual) != 8 or any(actual):
+                raise HTTPException(409, 'All eight outputs must be OFF')
+            APP_STATE['pulse_counter'].set_setting('io_input_polarity', {
+                'active_low': payload.active_low,
+                'inputs': [[i['name'], i['address']] for i in controller.cfg['inputs']]})
+            for item in controller.cfg['inputs']:item['active_low'] = payload.active_low
+            APP_STATE['input_revision'] = APP_STATE.get('input_revision', 0) + 1
+            # Publish no old normalized levels while the polling baseline resets.
+            with state_lock:
+                io_state['inputs'] = {}
+                io_state['input_events'] = {}
+                io_state['modbus_ok'] = False
+            return {'ok': True, 'active_low': payload.active_low}
+        except HTTPException:raise
+        except Exception:raise HTTPException(503, 'Input polarity could not be saved') from None
+
+
 @app.post("/outputs/{name}/test")
 def test_output(name: str):
     controller = APP_STATE["controller"]
@@ -644,6 +690,7 @@ def modbus_loop(
     connected = False
     filters={item['name']:InputFilter(item.get('debounce_ms',0)) for item in cfg['inputs']}
     buttons=ButtonEvents(filters)
+    input_revision = APP_STATE.get("input_revision", 0)
     try:
         while not stop_event.is_set():
             poll_wait = 0.05
@@ -653,34 +700,38 @@ def modbus_loop(
                         raise RuntimeError("Cannot open Modbus device")
                     controller.all_outputs_off()
                     connected = True
-                raw = controller.read_inputs()
+                with input_lock:
+                    if input_revision != APP_STATE.get("input_revision", 0):
+                        for filter_ in filters.values():filter_.reset()
+                        buttons.reset()
+                        input_revision = APP_STATE.get("input_revision", 0)
+                    raw = controller.read_inputs()
 
-                logical = {}
-                button_levels = {}
+                    logical = {}
+                    button_levels = {}
 
-                for index, item in enumerate(cfg["inputs"]):
-                    value = raw[item["address"]]
+                    for index, item in enumerate(cfg["inputs"]):
+                        value = raw[item["address"]]
 
-                    if item.get("active_low", False):
-                        value = not value
+                        if item.get("active_low", False):
+                            value = not value
 
-                    button_levels[item["name"]] = bool(value)
-                    logical[item["name"]] = filters[item['name']].observe(value,time.monotonic())
+                        button_levels[item["name"]] = bool(value)
+                        logical[item["name"]] = filters[item['name']].observe(value,time.monotonic())
 
-                events=buttons.observe(logical,button_levels)
-                with output_test.lock:
-                    update_output_state(controller)
+                    events=buttons.observe(logical,button_levels)
+                    with output_test.lock:
+                        update_output_state(controller)
 
-                with state_lock:
-                    io_state["raw_inputs"] = [
-                        int(x) for x in raw
-                    ]
-                    io_state["inputs"] = logical
-                    io_state["input_events"] = events
-                    io_state["modbus_ok"] = True
-                    io_state["last_poll_at"] = datetime.now(timezone.utc).isoformat()
-                    io_state["last_poll_monotonic"] = time.monotonic()
-
+                    with state_lock:
+                        io_state["raw_inputs"] = [
+                            int(x) for x in raw
+                        ]
+                        io_state["inputs"] = logical
+                        io_state["input_events"] = events
+                        io_state["modbus_ok"] = True
+                        io_state["last_poll_at"] = datetime.now(timezone.utc).isoformat()
+                        io_state["last_poll_monotonic"] = time.monotonic()
             except Exception as exc:
                 poll_wait = 1.0
                 for filter_ in filters.values():filter_.reset()
@@ -714,6 +765,7 @@ def main():
 
     stop_event = threading.Event()
     pulse_counter = PulseJournal(os.getenv("NV9_JOURNAL_PATH", "/var/lib/sammoy-io/nv9.sqlite3"))
+    restore_input_polarity(cfg, pulse_counter)
     APP_STATE["pulse_counter"] = pulse_counter
     io_state["nv9_pulses"] = pulse_counter.value()
 

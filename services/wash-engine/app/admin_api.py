@@ -206,3 +206,20 @@ def bill_filter_reset(user:Admin):
             result=io_sync(client,settings.io_helper_url,'/bill/filter/reset',{})
     audit(user,'admin_bill_filter_reset','Bill input fault acknowledged after stable inactive signal')
     return result
+
+
+class InputPolarityRequest(BaseModel):
+    active_low: bool = Field(strict=True)
+
+
+@router.post('/service/input-polarity')
+def input_polarity(payload:InputPolarityRequest,user:Admin):
+    from .admin_service import io_sync
+    with wash_runtime.lock:
+        require_idle(wash_runtime)
+        if getattr(wash_runtime, 'device_type', 'wash') != 'wash':
+            raise HTTPException(409, 'Настройка доступна только для поста мойки')
+        with httpx.Client(timeout=4,trust_env=False) as client:
+            result=io_sync(client,settings.io_helper_url,'/inputs/polarity',payload.model_dump())
+    audit(user,'admin_input_polarity',f"I/O inputs active_low={payload.active_low}; bill input unchanged")
+    return result
