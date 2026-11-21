@@ -81,3 +81,18 @@ class SystemControlTests(unittest.TestCase):
             response.status_code=404
             self.assertEqual(client.get('/api/system/actions/'+str(uuid4())).status_code,404)
         self.assertEqual(client.get('/api/system/actions/not-a-uuid').status_code,422)
+
+    def test_role_confirmation_is_checked_server_side(self):
+        standalone={'context_id':'fresh','requires_confirmation':False}
+        system_api.validate_reset_context(self.payload('full',reset_context_id='fresh'),standalone)
+        shared={'context_id':'shared','requires_confirmation':True}
+        with self.assertRaises(HTTPException):
+            system_api.validate_reset_context(self.payload('full',reset_context_id='shared'),shared)
+        system_api.validate_reset_context(self.payload('full',reset_context_id='shared',cluster_isolated=True),shared)
+        for ctx in (standalone,shared):
+            with self.assertRaises(HTTPException):
+                system_api.validate_reset_context(self.payload('full',reset_context_id='stale',cluster_isolated=True),ctx)
+
+    def test_context_endpoint_requires_authentication(self):
+        app=FastAPI();app.include_router(system_api.router)
+        self.assertEqual(TestClient(app).get('/api/system/reset-context').status_code,401)

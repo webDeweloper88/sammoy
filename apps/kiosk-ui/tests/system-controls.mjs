@@ -7,11 +7,15 @@ let browser
 try {
   for(let i=0;i<100;i++){try{await fetch(origin);break}catch{await new Promise(r=>setTimeout(r,100))}}
   browser=await chromium.launch({executablePath:process.env.CHROMIUM_EXECUTABLE,headless:true,args:['--no-sandbox','--disable-dev-shm-usage']})
-  const page=await browser.newPage({viewport:{width:390,height:844}}), actions=[], errors=[]; let statusPolls=0
+  const page=await browser.newPage({viewport:{width:390,height:844}}), actions=[], errors=[]; let statusPolls=0,role='primary'
   page.on('pageerror',e=>errors.push(e.message))
-  await page.route('**/system-controls-harness',route=>route.fulfill({contentType:'text/html',body:`<html><head><link rel="stylesheet" href="/src/owner.css"></head><body><div id="app"></div><script type="module">import {createApp} from '/node_modules/.vite/deps/vue.js';import Controls from '/src/SystemControls.vue';createApp(Controls,{resets:true,language:'ru',initialLogin:'admin'}).mount('#app')</script></body></html>`}))
+  await page.route('**/system-controls-harness',route=>route.fulfill({contentType:'text/html',body:`<html><head><link rel="stylesheet" href="/src/owner.css"></head><body><div id="app"></div><script type="module">import {createApp} from '/node_modules/.vite/deps/vue.js';import Controls from '/src/SystemControls.vue';createApp(Controls,{resets:true,language:'ru',initialLogin:'admin',token:'existing-admin'}).mount('#app')</script></body></html>`}))
   await page.route('**/api/**',async route=>{
     const path=new URL(route.request().url()).pathname
+    if(path==='/api/system/reset-context'){
+      assert.equal(route.request().headers().authorization,'Bearer existing-admin')
+      return route.fulfill({json:{ok:true,role,local_post:3,requires_confirmation:role!=='standalone',requires_peer_isolation:!['standalone','member'].includes(role),context_id:'context-'+role}})
+    }
     if(path==='/api/auth/login')return route.fulfill({contentType:'application/json',body:JSON.stringify({access_token:'fresh-only',user:{role:'admin'}})})
     if(path==='/api/system/actions'){
       assert.equal(route.request().headers().authorization,'Bearer fresh-only')
@@ -35,16 +39,35 @@ try {
   await dialog.getByLabel('Пароль',{exact:true}).fill('not-real-password')
   await dialog.getByRole('textbox').last().fill('FULL')
   assert(await dialog.getByRole('button',{name:'Подтвердить',exact:true}).isDisabled())
+  await dialog.getByText('Главный пост / прежний главный',{exact:true}).waitFor()
   await dialog.getByRole('checkbox').check()
   await dialog.getByRole('button',{name:'Подтвердить',exact:true}).click()
   await dialog.getByRole('link',{name:'Открыть установку'}).waitFor()
-  assert.equal(actions.length,1);assert.equal(actions[0].action,'full');assert.equal(actions[0].cluster_isolated,true)
+  assert.equal(actions.length,1);assert.equal(actions[0].action,'full');assert.equal(actions[0].cluster_isolated,true);assert.equal(actions[0].reset_context_id,'context-primary')
   assert.equal(await page.evaluate(()=>sessionStorage.getItem('sammoy-owner-token')),null)
   assert(await dialog.evaluate(el=>el.getBoundingClientRect().width<=innerWidth))
   assert(statusPolls>=3)
   await page.waitForURL(origin+'/install')
   await page.getByRole('heading',{name:'Installation wizard'}).waitFor()
   await page.goto(origin+'/system-controls-harness')
+  for(const value of ['standalone','member','standby','previous_member']){
+    role=value
+    await page.getByRole('button',{name:'Полный сброс',exact:true}).click()
+    dialog=page.getByRole('dialog')
+    await dialog.getByRole('textbox').last().fill('FULL')
+    if(value==='standalone'){
+      await dialog.getByText('Самостоятельный пост',{exact:true}).waitFor()
+      assert.equal(await dialog.getByRole('checkbox').count(),0)
+      assert(await dialog.getByRole('button',{name:'Подтвердить',exact:true}).isEnabled())
+    }else{
+      await dialog.getByRole('checkbox').waitFor()
+      assert(await dialog.getByRole('button',{name:'Подтвердить',exact:true}).isDisabled())
+      if(value==='member')await dialog.getByText('Остальные посты выключать не требуется.',{exact:false}).waitFor()
+      await dialog.getByRole('checkbox').check()
+      assert(await dialog.getByRole('button',{name:'Подтвердить',exact:true}).isEnabled())
+    }
+    await dialog.getByRole('button',{name:'Отмена',exact:true}).click()
+  }
   await page.getByRole('button',{name:'Перезапустить',exact:false}).click()
   dialog=page.getByRole('dialog')
   await dialog.getByLabel('Пароль',{exact:true}).fill('not-real-password')

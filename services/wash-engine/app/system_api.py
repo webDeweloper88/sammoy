@@ -45,17 +45,35 @@ class Action(BaseModel):
     request_id: UUID
     confirmation: str
     cluster_isolated: bool = False
+    reset_context_id: str | None = None
 
 
-def validate_action(payload, user, issued_at, now):
+def validate_action(payload, user, issued_at, now, isolation_required=True):
     if not 0 <= now - issued_at <= 60:
         raise HTTPException(401, 'Confirm your password again')
     if payload.action in ('settings', 'full') and user['role'] != 'admin':
         raise HTTPException(403, 'Factory reset requires Admin')
     if payload.confirmation != payload.action.upper():
         raise HTTPException(400, 'Confirmation does not match')
-    if payload.action == 'full' and not payload.cluster_isolated:
+    if payload.action == 'full' and isolation_required and not payload.cluster_isolated:
         raise HTTPException(409, 'Disconnect other posts from this wallet before a full reset')
+
+
+def validate_reset_context(payload, context):
+    if payload.reset_context_id != context['context_id']:
+        raise HTTPException(409, 'Роль поста изменилась. Откройте подтверждение сброса заново.')
+    if context['requires_confirmation'] and not payload.cluster_isolated:
+        raise HTTPException(409, 'Подтвердите условия сброса для роли этого поста')
+
+
+@router.get('/reset-context')
+def reset_context(user: Annotated[dict, Depends(require_role('owner', 'admin'))]):
+    from .db import db
+    from .reset_context import read_context
+    from fastapi.responses import JSONResponse
+    with db() as connection:
+        context = read_context(connection)
+    return JSONResponse({'ok': True, **context}, headers={'Cache-Control': 'no-store'})
 
 
 @router.post('/actions')
@@ -63,7 +81,7 @@ def system_action(payload: Action,
                   user: Annotated[dict, Depends(require_role('owner', 'admin'))],
                   credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer)]):
     claims = decode_access_token(credentials.credentials)
-    validate_action(payload, user, int(claims.get('iat', 0)), time.time())
+    validate_action(payload, user, int(claims.get('iat', 0)), time.time(), isolation_required=False)
     with wash_runtime.lock:
         require_idle(wash_runtime)
         # A missing relay module must not prevent orderly host poweroff. Reset,
@@ -74,6 +92,10 @@ def system_action(payload: Action,
             try:
                 with db() as connection:
                     check_ready(connection, payload.action)
+                    if payload.action == 'full':
+                        from .reset_context import read_context
+                        context = read_context(connection)
+                        validate_reset_context(payload, context)
             except RuntimeError as error:
                 raise HTTPException(409, str(error)) from None
             all_off(wash_runtime, settings.io_helper_url)
