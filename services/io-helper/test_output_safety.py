@@ -98,3 +98,60 @@ class SerialReconnectTests(unittest.TestCase):
                     with self.assertRaises(RuntimeError):controller.connect()
                 bad.close.assert_called_once();self.assertIsNone(controller.client)
                 self.assertTrue(controller.connect());self.assertIs(controller.client,good)
+
+class FullBankReadbackTests(unittest.TestCase):
+    def test_write_checks_selected_bit_in_full_bank(self):
+        c=main.ModbusController({'transport':{'slave_address':1},'outputs':[{'name':'foam','address':3}]})
+        c.client=Mock();c.client.write_coil.return_value.isError.return_value=False
+        r=c.client.read_coils.return_value;r.isError.return_value=False
+        r.bits=[False]*3+[True]+[False]*4
+        self.assertTrue(c.write_output('foam',True))
+        c.client.read_coils.assert_called_once_with(address=0,count=8,slave=1)
+        r.bits=[True]+[False]*7
+        with self.assertRaisesRegex(RuntimeError,'mismatch'):c.write_output('foam',True)
+        r.bits=[False]*7
+        with self.assertRaisesRegex(RuntimeError,'Incomplete'):c.write_output('foam',False)
+
+class FactoryAddressTests(unittest.TestCase):
+    def response(self, ok=True):
+        r=Mock();r.isError.return_value=not ok;r.bits=[False]*8;return r
+    def controller(self):
+        return main.ModbusController({'transport':{'slave_address':1},'outputs':[]})
+    def test_factory_first_then_change_and_verify_one(self):
+        c=self.controller();client=Mock()
+        client.read_coils.return_value=self.response()
+        client.read_discrete_inputs.return_value=self.response()
+        # Vendor acknowledgement can be an error; reads must prove success.
+        client.write_registers.return_value=self.response(False)
+        from unittest.mock import patch,call
+        with patch.object(main.time,'sleep'):c._prepare_board_address(client)
+        self.assertEqual(client.method_calls,[
+            call.read_coils(address=0,count=8,slave=255),
+            call.read_discrete_inputs(address=0,count=8,slave=255),
+            call.write_registers(address=0,values=[1],slave=0),
+            call.read_coils(address=0,count=8,slave=1),
+            call.read_discrete_inputs(address=0,count=8,slave=1)])
+        client.write_coil.assert_not_called()
+    def test_existing_address_one_never_reprogrammed(self):
+        c=self.controller();client=Mock()
+        client.read_coils.side_effect=[self.response(False),self.response()]
+        client.read_discrete_inputs.return_value=self.response()
+        c._prepare_board_address(client)
+        client.write_registers.assert_not_called()
+    def test_missing_board_or_unverified_change_fails_closed(self):
+        from unittest.mock import patch
+        for factory_found in (False,True):
+            c=self.controller();client=Mock()
+            client.read_coils.side_effect=[self.response(factory_found),self.response(False)]
+            client.read_discrete_inputs.return_value=self.response()
+            with patch.object(main.time,'sleep'):
+                with self.assertRaisesRegex(RuntimeError,'verification failed'):c._prepare_board_address(client)
+    def test_wrong_profile_or_partial_factory_response_cannot_change_address(self):
+        c=self.controller();client=Mock();c.transport['slave_address']=2
+        with self.assertRaises(RuntimeError):c._prepare_board_address(client)
+        client.read_coils.assert_not_called()
+        c.transport['slave_address']=1
+        client.read_coils.return_value=self.response()
+        client.read_discrete_inputs.return_value=self.response(False)
+        with self.assertRaises(RuntimeError):c._prepare_board_address(client)
+        client.write_registers.assert_not_called()

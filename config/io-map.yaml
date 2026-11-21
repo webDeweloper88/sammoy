@@ -17,6 +17,7 @@ transport:
   parity: none
   stop_bits: 1
   slave_address: 1
+  auto_assign_factory_address: true
   response_timeout_ms: 250
 
 # NV9 bill acceptor

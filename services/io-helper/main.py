@@ -98,11 +98,41 @@ class ModbusController:
                 if not client.connect():
                     client.close()
                     return False
+                if self.transport.get("auto_assign_factory_address", False):
+                    self._prepare_board_address(client)
             except Exception:
                 client.close()
                 raise
             self.client = client
             return True
+
+    def _prepare_board_address(self, client):
+        """Dedicated single-board bus: probe factory 255 before operational 1.
+
+        This board's address-setting command is vendor-specific broadcast FC16.
+        Its echo is nonstandard, so only subsequent reads at 1 prove success.
+        No relay ON commands are sent here; startup OFF follows before readiness.
+        """
+        if self.transport["slave_address"] != 1:
+            raise RuntimeError("Automatic board addressing requires slave address 1")
+
+        def valid(result):
+            return not result.isError() and len(getattr(result, "bits", [])) >= 8
+
+        factory = client.read_coils(address=0, count=8, slave=255)
+        if valid(factory):
+            if not valid(client.read_discrete_inputs(address=0, count=8, slave=255)):
+                raise RuntimeError("Factory board input check failed")
+            # Vendor firmware accepts address changes only through slave 0.
+            # Ignore its nonstandard acknowledgement; verify the new address.
+            client.write_registers(address=0, values=[1], slave=0)
+            time.sleep(0.1)
+            print("Modbus: factory address 255 found; verifying address 1", flush=True)
+        else:
+            print("Modbus: no factory board at 255; checking address 1", flush=True)
+        for read in (client.read_coils, client.read_discrete_inputs):
+            if not valid(read(address=0, count=8, slave=1)):
+                raise RuntimeError("Board address 1 verification failed")
 
     def close(self):
         with self.lock:
@@ -155,9 +185,10 @@ class ModbusController:
             if self.cfg.get("safety", {}).get(
                 "readback_after_write", True
             ):
+                # Some 8-channel boards only accept full-bank reads.
                 readback = self.client.read_coils(
-                    address=address,
-                    count=1,
+                    address=0,
+                    count=8,
                     slave=self.transport["slave_address"],
                 )
 
@@ -166,7 +197,9 @@ class ModbusController:
                         f"Readback failed: {readback}"
                     )
 
-                actual = bool(readback.bits[0])
+                if len(readback.bits) < 8:
+                    raise RuntimeError("Incomplete output readback")
+                actual = bool(readback.bits[address])
 
                 if actual != bool(on):
                     raise RuntimeError(
