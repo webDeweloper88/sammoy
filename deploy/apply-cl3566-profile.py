@@ -35,7 +35,7 @@ def apply():
     if target not in ('wash','dry_fog'):raise RuntimeError('Unknown device type')
     if target=='dry_fog':
         c=get('commissioning/wallet')['configuration']
-        if not c.get('device_wallet_enabled') or c.get('device_types',{}).get(str(c['local_post']))!=target:
+        if c.get('enabled') and (not c.get('device_wallet_enabled') or c.get('device_types',{}).get(str(c['local_post']))!=target):
             raise RuntimeError('Configure station types on primary first')
     layout='dry-fog' if target=='dry_fog' else 'nfc-relay'
     cmd=compose(layout)

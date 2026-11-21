@@ -75,3 +75,8 @@ class InstallReadinessTests(unittest.IsolatedAsyncioTestCase):
             factory.return_value.__aenter__.return_value=client
             self.assertTrue((await main.commissioning_internet())['reachable'])
             client.get.assert_awaited_once_with('https://pay.labrix.uz/health')
+
+    async def test_standalone_telegram_is_allowed_on_own_number(self):
+        with patch.object(main,'get_commissioning_state',return_value={'complete':False}),patch.object(main,'get_license_settings',return_value={'site_code':'S','post_no':7}),patch('app.wallet_api.configuration',return_value={'enabled':False}),patch.object(main,'telegram_setup_request',AsyncMock(return_value={'ok':True})):
+            result=await main.commissioning_telegram_status()
+            self.assertTrue(result['install_manage_allowed']);self.assertEqual(result['primary_post'],7)

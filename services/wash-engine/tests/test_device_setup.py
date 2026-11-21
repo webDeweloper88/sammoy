@@ -78,3 +78,13 @@ class DeviceSetupTests(unittest.TestCase):
             device_setup.startup_guard(runtime)
             cfg['device_types']['1']='wash'
             with self.assertRaises(RuntimeError):device_setup.startup_guard(runtime)
+
+    def test_standalone_fog_starts_without_shared_wallet_or_peers(self):
+        for post in (1,3,7):
+            cfg={'enabled':False,'local_post':post,'device_wallet_enabled':False,'device_types':{}}
+            with patch('app.config.settings.device_type','dry_fog'),patch('app.wallet_api.configuration',return_value=cfg),patch('app.wallet_client.discover_configuration') as discover:
+                device_setup.startup_guard(Mock(device_type='dry_fog'))
+                discover.assert_not_called()
+    def test_standalone_still_requires_matching_physical_profile(self):
+        with patch('app.config.settings.device_type','wash'),patch('app.wallet_api.configuration',return_value={'enabled':False}):
+            with self.assertRaises(RuntimeError):device_setup.startup_guard(Mock(device_type='dry_fog'))

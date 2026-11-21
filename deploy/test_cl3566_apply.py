@@ -21,7 +21,13 @@ class ApplyGuards(unittest.TestCase):
                 run.assert_not_called()
 
     def test_dry_fog_requires_wallet_inventory(self):
-        values=[{'state':{}},{'requested':{'type':'dry_fog'}},{'configuration':{'device_wallet_enabled':False}}]
+        values=[{'state':{}},{'requested':{'type':'dry_fog'}},{'configuration':{'enabled':True,'device_wallet_enabled':False}}]
         with patch.object(m,'board',return_value='cl3566-a-e'),patch.object(m,'ready',return_value=True),patch.object(m,'get',side_effect=values),patch.object(m,'run') as run:
             with self.assertRaises(RuntimeError):m.apply()
             run.assert_not_called()
+
+    def test_standalone_fog_reaches_compose_validation_without_inventory(self):
+        values=[{'state':{}},{'requested':{'type':'dry_fog'}},{'configuration':{'enabled':False,'device_wallet_enabled':False}}]
+        with patch.object(m,'board',return_value='cl3566-a-e'),patch.object(m,'ready',return_value=True),patch.object(m,'get',side_effect=values),patch.object(m,'compose',return_value=['docker','compose']),patch.object(m,'run',side_effect=RuntimeError('compose-validation')) as run:
+            with self.assertRaisesRegex(RuntimeError,'compose-validation'):m.apply()
+            run.assert_called_once_with(['docker','compose','config','--quiet'])

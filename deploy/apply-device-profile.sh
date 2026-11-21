@@ -29,7 +29,7 @@ if any(s.get(k) for k in ('creditSum','activeSessionId','activeMode','armedMode'
 target=get('/api/commissioning/device')['requested']['type']
 if target not in ('wash','dry_fog'):raise SystemExit('Unknown type')
 c=get('/api/commissioning/wallet')['configuration']
-if target=='dry_fog' and (not c.get('device_wallet_enabled') or c.get('device_types',{}).get(str(c['local_post']))!=target):raise SystemExit('Configure device types on the primary first')
+if target=='dry_fog' and c.get('enabled') and (not c.get('device_wallet_enabled') or c.get('device_types',{}).get(str(c['local_post']))!=target):raise SystemExit('Configure device types on the primary first')
 print(target)
 PY
 )

@@ -108,7 +108,10 @@ def startup_guard(runtime):
     if settings.device_type!=runtime.device_type:
         raise RuntimeError('Dry fog requires a commissioned hardware profile and wallet migration')
     cfg=configuration()
-    if cfg.get('enabled') and cfg['local_post'] not in (cfg['primary_post'],cfg['standby_post']):
+    # Standalone stations use local cards; shared inventory is optional.
+    if not cfg.get('enabled'):
+        return
+    if cfg['local_post'] not in (cfg['primary_post'],cfg['standby_post']):
         from .wallet_client import discover_configuration
         cfg=discover_configuration()
     if not cfg.get('device_wallet_enabled') or cfg.get('device_types',{}).get(str(cfg['local_post']))!=runtime.device_type:

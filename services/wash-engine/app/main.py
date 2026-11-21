@@ -4039,7 +4039,7 @@ async def commissioning_telegram_status():
         raise HTTPException(403, 'Post commissioning is already complete')
     from .wallet_api import configuration
     cfg = configuration()
-    primary = int(cfg['primary_post']) if cfg['enabled'] else 1
+    primary = int(cfg['primary_post']) if cfg['enabled'] else int(get_license_settings().get('post_no') or 1)
     result = await telegram_setup_request('status')
     return {**result, 'install_manage_allowed': int(get_license_settings().get('post_no') or 1) == primary, 'primary_post': primary}
 
@@ -4055,7 +4055,7 @@ async def commissioning_telegram_action(action: Literal['configure-auto', 'pairi
         raise HTTPException(409, 'Activate the station first')
     from .wallet_api import configuration
     cfg = configuration()
-    primary = int(cfg['primary_post']) if cfg['enabled'] else 1
+    primary = int(cfg['primary_post']) if cfg['enabled'] else int(get_license_settings().get('post_no') or 1)
     if int(config.get('post_no') or 1) != primary:
         raise HTTPException(409, 'Telegram is managed on the primary station')
     if action == 'configure-auto':

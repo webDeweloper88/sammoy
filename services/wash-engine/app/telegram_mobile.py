@@ -28,7 +28,7 @@ def guard():
     if main.get_commissioning_state().get('complete'):raise HTTPException(403,'Настройка завершена. Используйте Owner → Telegram.')
     require_idle(main.wash_runtime)
     cfg=configuration();identity=main.get_license_settings()
-    primary=int(cfg['primary_post']) if cfg['enabled'] else 1
+    primary=int(cfg['primary_post']) if cfg['enabled'] else int(identity.get('post_no') or 1)
     if int(identity.get('post_no') or 1)!=primary:raise HTTPException(409,'Telegram настраивается на главном посте №'+str(primary))
     if not identity.get('site_code') or main.apply_license_to_runtime().get('locked'):raise HTTPException(409,'Сначала активируйте пост')
     return hashlib.sha256(json.dumps([identity.get('site_code'),identity.get('site_token'),identity.get('post_no'),primary]).encode()).hexdigest()

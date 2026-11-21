@@ -21,7 +21,7 @@ document.documentElement.dataset.theme=theme.value
 const networkDirty=ref(false),networkPending=ref(false),temporaryNetwork=ref(null),temporaryBusy=ref(false),disconnectTemporary=ref(true)
 const temporaryPending=computed(()=>Boolean(temporaryNetwork.value?.pending))
 const step=ref(1),walletDirty=ref(false),walletChoice=ref('later'),walletStatus=ref(null),telegramChoice=ref('later'),telegramBusy=ref(false)
-const telegramPrimary=computed(()=>walletStatus.value?.configuration?.enabled?Number(walletStatus.value.configuration.primary_post):1)
+const telegramPrimary=computed(()=>walletStatus.value?.configuration?.enabled?Number(walletStatus.value.configuration.primary_post):Number(status.value?.site?.post_no||1))
 const canManageTelegram=computed(()=>Number(status.value?.site?.post_no)===telegramPrimary.value)
 const telegramPrimaryUrl=computed(()=>walletStatus.value?.configuration?.peer_urls?.[String(telegramPrimary.value)]?.replace(/\/$/,'')+'/owner/telegram')
 const steps=computed(()=>[tr('Проверка','Tekshiruv','Checks'),tr('Активация','Faollashtirish','Activation'),tr('Кошелёк и роли','Hamyon va rollar','Wallet and roles'),'Telegram',tr('Запуск','Ishga tushirish','Launch')])
