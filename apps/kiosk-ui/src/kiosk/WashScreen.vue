@@ -1,4 +1,5 @@
 <script setup>
+import {headerClock} from './header-clock.js'
 import {hardwareErrorText,hardwareWarningTexts} from './hardware-feedback.js'
 import {dryFogIds,dryFogAdditional,dryFogLabels,dryFogDescriptions,dryFogTones,dryFogTexts} from './dry-fog.js'
 import { walletErrorText } from './card-feedback.js'
@@ -37,6 +38,7 @@ const dryFog=computed(()=>props.preview?props.previewKind==='dry_fog':state.valu
 const idleBlocked=computed(()=>paymentOpen.value||paymentPending.value||socialOpen.value||props.preview||dryFog.value)
 const {visible:idleVisible,wake}=useIdleScreen(state,receivedAt,idleBlocked)
 const t=computed(()=>({...washTexts[language.value],...(dryFog.value?dryFogTexts[language.value]:{})}))
+const clockText=computed(()=>headerClock(now.value))
 const credit=computed(()=>state.value?.creditSum)
 const selected=computed(()=>state.value?.activeMode||state.value?.armedMode)
 const manualPause=computed(()=>state.value?.selectedMode==='pause'&&Boolean(state.value?.armedMode))
@@ -138,6 +140,7 @@ watch(idleVisible, v=>{if(v)language.value=defaultLanguage(config.value)})
  <main v-else :aria-busy="busy" class="wash-screen" :class="{'without-optional':!optionalPrograms.length,'cards-design':design==='cards','dry-fog-design':dryFog}" :lang="{uz:'uz',kz:'kk',ky:'ky',ru:'ru'}[language]">
   <header class="wash-topbar">
    <div class="wash-brand" role="button" tabindex="0" :aria-label="t.admin" @pointerdown="startLoginHold" @pointerup="cancelLoginHold" @pointercancel="cancelLoginHold" @pointerleave="cancelLoginHold" @pointermove="moveLoginHold" @contextmenu.prevent @keydown.enter.prevent="startLoginHold" @keyup.enter="cancelLoginHold" @blur="cancelLoginHold"><img v-if="config?.brand?.logoUrl" class="wash-owner-logo" :src="config.brand.logoUrl" alt=""/><img v-else class="theme2-brand-mark" src="/assets/theme2/brand/labrix_mark_L.png" alt=""/><div><strong v-if="brandTitle(config)==='LABRIX WASH'">LABRIX <span>WASH</span></strong><strong v-else class="custom-brand">{{brandTitle(config)}}</strong><small>{{ brandSubtitle(config,t.descriptor) }}</small></div></div>
+   <time class="wash-header-clock" :datetime="new Date(now).toISOString()"><strong>{{clockText.time}}</strong><span>{{clockText.date}}</span></time>
    <nav v-if="config?.layout?.showLanguageButtons!==false" aria-label="Language"><button v-for="lang in ['ru','uz','kz','ky']" :key="lang" :aria-label="languageNames[lang]" :aria-pressed="language===lang" :class="{active:language===lang}" @click="language=lang">{{ lang.toUpperCase() }}</button></nav>
   </header>
   <section class="wash-status" :style="design==='wheel'?{'--status-tone':wheelStatusTone,'--status-ink':wheelStatusInk}:undefined" :class="{'wheel-status':design==='wheel','time-primary':timePrimary,'pause-free':pauseVisual==='free','pause-paid':pauseVisual==='paid','pause-stopped':pauseVisual==='stopped'}" :aria-label="t.balance+' / '+t.time">
@@ -175,7 +178,7 @@ watch(idleVisible, v=>{if(v)language.value=defaultLanguage(config.value)})
 </template>
 
 <style scoped>.theme2-brand-mark{width:calc(82 * var(--u));height:calc(90 * var(--u));object-fit:contain;flex:none}.preview-tools{position:fixed;top:8px;left:8px;z-index:50;background:#152733;color:white;border:1px solid #8eb5cb;border-radius:8px;font-family:Arial,sans-serif;font-size:16px;padding:10px;max-width:340px;box-shadow:0 3px 12px #0005}.preview-tools summary{cursor:pointer;font-weight:bold;min-height:32px}.preview-tools label{display:flex;gap:12px;align-items:center;justify-content:space-between;margin:12px 0}.preview-tools select,.preview-tools button{font-size:16px;padding:12px;border-radius:6px;border:1px solid #8eb5cb;background:#fff;color:#152733}.preview-tools p{font-size:14px}.preview-tools input{width:24px;height:24px}.status-primary.has-bonus .status-value strong{font-size:calc(104 * var(--u))}
-</style>
+.wash-topbar .wash-brand{flex:1;min-width:0}.wash-topbar .wash-brand>div{min-width:0}.wash-topbar .wash-brand strong{font-size:calc(40 * var(--u))}.wash-topbar .wash-brand small{font-size:calc(18 * var(--u))}.wash-header-clock{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:none;min-width:calc(145 * var(--u));gap:calc(4 * var(--u));color:var(--wash-text);font-variant-numeric:tabular-nums;line-height:1.1;white-space:nowrap}.wash-header-clock strong{font-size:calc(36 * var(--u));font-weight:700}.wash-header-clock span{font-size:calc(21 * var(--u));color:var(--wash-muted)}</style>
 
 <style scoped>.theme2-brand-mark{width:calc(82 * var(--u));height:calc(90 * var(--u));object-fit:contain;flex:none}
 .bonus-caption{margin:0;text-align:center;font-size:calc(20 * var(--u));line-height:1.15;color:var(--wash-muted)}
