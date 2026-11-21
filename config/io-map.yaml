@@ -40,7 +40,7 @@ inputs:
   debounce_ms: 40
 - name: total_stop
   address: 1
-  active_low: true
+  active_low: false
   debounce_ms: 40
 - name: mode_water
   address: 2

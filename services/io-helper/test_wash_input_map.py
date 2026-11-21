@@ -11,6 +11,6 @@ class WashInputMapTests(unittest.TestCase):
             cfg=yaml.safe_load((root/filename).read_text())
             self.assertEqual([x['name'] for x in cfg['inputs']],expected,filename)
             self.assertEqual([x['address'] for x in cfg['inputs']],list(range(8)))
-            self.assertTrue(cfg['inputs'][1]['active_low'])
-            self.assertTrue(all(not x['active_low'] for x in cfg['inputs'] if x['name']!='total_stop'))
+            self.assertFalse(cfg['inputs'][1]['active_low'])
+            self.assertTrue(all(not x['active_low'] for x in cfg['inputs']))
             self.assertEqual([x['name'] for x in cfg['outputs']],['water','osmos','nano','foam','wax','chem','vacuum','air'])

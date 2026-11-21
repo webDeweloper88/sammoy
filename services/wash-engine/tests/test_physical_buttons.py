@@ -80,3 +80,13 @@ class PhysicalButtonTests(unittest.TestCase):
             r,io=self.runtime();self.tick(r,100.2);r.select_mode(mode)
             io['inputs']['total_stop']=True;self.tick(r,100.4)
             self.assertEqual(r.last_output,mode)
+
+    def test_no_trigger_is_continuous_and_release_stops_after_configured_grace(self):
+        r,io=self.runtime();self.tick(r,100.2);r.select_mode('water')
+        io['inputs']['total_stop']=True;self.tick(r,100.4)
+        self.assertEqual(r.last_output,'water')
+        self.tick(r,100.6);self.assertEqual(r.last_output,'water')
+        io['inputs']['total_stop']=False;self.tick(r,100.8)
+        self.tick(r,102.0);self.assertIsNone(r.last_output)
+        self.tick(r,104.0);self.assertIsNone(r.last_output)
+        self.assertFalse(r.state['totalStopActive'])
