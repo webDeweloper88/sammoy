@@ -15,6 +15,7 @@ from bill_process_reader import ProcessLevelReader, VendorProcessLevelReader
 from bill_vendor_gpio import VendorSysfsLine
 
 import gpiod
+from button_events import ButtonEvents
 import yaml
 import uvicorn
 from fastapi import FastAPI, HTTPException, Query
@@ -34,6 +35,7 @@ started_monotonic = time.monotonic()
 
 io_state = {
     "inputs": {},
+    "input_events": {},
     "raw_inputs": [],
     "outputs": {},
     "raw_outputs": [],
@@ -287,6 +289,7 @@ def get_io():
         return {
             "device_type": APP_STATE["controller"].cfg.get("device_type", "wash"),
             "inputs": dict(io_state["inputs"]),
+            "input_events": dict(io_state.get("input_events",{})),
             "raw_inputs": list(io_state["raw_inputs"]),
             "outputs": dict(io_state["outputs"]),
             "raw_outputs": list(io_state["raw_outputs"]),
@@ -640,6 +643,7 @@ def modbus_loop(
 
     connected = False
     filters={item['name']:InputFilter(item.get('debounce_ms',0)) for item in cfg['inputs']}
+    buttons=ButtonEvents(filters)
     try:
         while not stop_event.is_set():
             poll_wait = 0.05
@@ -652,15 +656,18 @@ def modbus_loop(
                 raw = controller.read_inputs()
 
                 logical = {}
+                button_levels = {}
 
                 for index, item in enumerate(cfg["inputs"]):
-                    value = raw[index]
+                    value = raw[item["address"]]
 
                     if item.get("active_low", False):
                         value = not value
 
+                    button_levels[item["name"]] = bool(value)
                     logical[item["name"]] = filters[item['name']].observe(value,time.monotonic())
 
+                events=buttons.observe(logical,button_levels)
                 with output_test.lock:
                     update_output_state(controller)
 
@@ -669,6 +676,7 @@ def modbus_loop(
                         int(x) for x in raw
                     ]
                     io_state["inputs"] = logical
+                    io_state["input_events"] = events
                     io_state["modbus_ok"] = True
                     io_state["last_poll_at"] = datetime.now(timezone.utc).isoformat()
                     io_state["last_poll_monotonic"] = time.monotonic()
@@ -676,6 +684,7 @@ def modbus_loop(
             except Exception as exc:
                 poll_wait = 1.0
                 for filter_ in filters.values():filter_.reset()
+                buttons.reset()
                 with state_lock:
                     io_state["modbus_ok"] = False
 

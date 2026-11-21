@@ -55,7 +55,7 @@ DEFAULT_WASH_PARAMETERS: dict[str, Any] = {
     # may be safely restored. Owner can change this dynamically.
     "powerRecoverySeconds": 600,
 
-    # IN3 is the wash-gun/total-stop permission contact.  A mode may energize
+    # The configured total_stop input is the wash-gun permission contact.  A mode may energize
     # its relay only while this input is physically active.
     "requireTotalStopTrigger": True,
     "tariffs": {
@@ -97,7 +97,7 @@ def normalize_parameters(value: dict[str, Any] | None, device_type: str = "wash"
     params = deep_merge(defaults, value or {})
     if device_type == "dry_fog":
         # Trigger wiring is diagnostic only for this type; an old wash setting
-        # must never make a fragrance require IN3.
+        # must never make a fragrance require a wash trigger.
         params['requireTotalStopTrigger'] = False
         from .dry_fog_purge import normalize as normalize_purge
         params['purge'] = normalize_purge(params.get('purge'))
@@ -211,6 +211,8 @@ class WashRuntime:
         self.program_order = tuple(device['client_programs']) + ('pause',)
         self.parameter_key = 'dry_fog_parameters' if device_type == 'dry_fog' else 'wash_parameters'
         self.lock = threading.RLock()
+        from .physical_buttons import PhysicalButtons
+        self.physical_buttons=PhysicalButtons()
         self._wallet_pending_snapshot = None
         self._purge_idle_since = time.monotonic()
         self._purge_until = None
@@ -422,7 +424,7 @@ class WashRuntime:
             "simulation": deepcopy(self.simulation),
         }
 
-    def select_mode(self, mode: str) -> dict[str, Any]:
+    def select_mode(self, mode: str, *, physical_stop: bool = False) -> dict[str, Any]:
         if mode not in self.program_order:
             raise ValueError(f"Unknown wash mode: {mode}")
 
@@ -445,7 +447,7 @@ class WashRuntime:
                 )
 
             tariff = self.params["tariffs"].get(mode, {})
-            if tariff.get("enabled") is False:
+            if tariff.get("enabled") is False and not (physical_stop and mode=="pause"):
                 raise ValueError(f"Wash mode disabled: {mode}")
 
             credit = int(self.state.get("creditSum") or 0)
@@ -962,6 +964,17 @@ class WashRuntime:
             )
 
             self.state["totalStopActive"] = total_stop_active
+            if self.device_type=='wash':
+                action=self.physical_buttons.action(io)
+                if action=='pause' and self.state.get('selectedMode')=='pause' and not self.state.get('requestedOutput'):
+                    action=None
+                if action and not skip_runtime:
+                    try:
+                        self.select_mode(action,physical_stop=(action=='pause'))
+                        self.state['lastPhysicalInputError']=None
+                    except ValueError as exc:
+                        self.state['lastPhysicalInputError']=str(exc)
+
 
             trigger_required = bool(
                 self.params.get(
@@ -976,7 +989,7 @@ class WashRuntime:
 
             if not trigger_required:
                 # Winter/bypass mode:
-                # keep DI3 visible in diagnostics but completely exclude
+                # keep the trigger visible in diagnostics but completely exclude
                 # it from program-output permission logic.
                 self.state["resumeRequiresTriggerReset"] = False
                 self.state["_triggerResetOffFloat"] = 0.0
@@ -2775,6 +2788,7 @@ class WashRuntime:
 
     def _io_fault(self,message):
         with self.lock:
+            self.physical_buttons.reset()
             self._purge_idle_since = time.monotonic()
             self._purge_until = None
             self.state.update(purgeActive=False, purgeRemainingSeconds=0)

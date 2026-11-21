@@ -22,32 +22,40 @@ bill_acceptor:
   source: vendor-sysfs
   reader: level-process
   active_low: true
+# IN1 pause; IN2 trigger; IN3–IN8 water/osmos/nano/foam/wax/chem.
 inputs:
-- name: di1
+- name: pause_button
   address: 0
-  active_low: true
-- name: di2
+  active_low: false
+  debounce_ms: 40
+- name: total_stop
   address: 1
   active_low: true
-- name: total_stop
-  address: 2
-  active_low: true
   debounce_ms: 40
-- name: di4
+- name: mode_water
+  address: 2
+  active_low: false
+  debounce_ms: 40
+- name: mode_osmos
   address: 3
-  active_low: true
-- name: di5
+  active_low: false
+  debounce_ms: 40
+- name: mode_nano
   address: 4
-  active_low: true
-- name: di6
+  active_low: false
+  debounce_ms: 40
+- name: mode_foam
   address: 5
-  active_low: true
-- name: di7
+  active_low: false
+  debounce_ms: 40
+- name: mode_wax
   address: 6
-  active_low: true
-- name: di8
+  active_low: false
+  debounce_ms: 40
+- name: mode_chem
   address: 7
-  active_low: true
+  active_low: false
+  debounce_ms: 40
 outputs:
 - name: water
   address: 0
