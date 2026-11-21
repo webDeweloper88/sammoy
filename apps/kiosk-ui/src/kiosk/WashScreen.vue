@@ -73,10 +73,11 @@ const statusText=computed(()=>{
  if(s?.pauseState==='paid')return (isVip.value?t.value.vipPauseCharging:t.value.pauseCharging)+' · '+(manualPause.value?t.value.resume:t.value.trigger)
  if(s?.phase==='pause_free_exhausted')return t.value.pauseStopped
  if(running.value)return t.value.running
- if(selected.value)return t.value.trigger
+ if(selected.value)return waitingLabel.value
  return credit.value>0?t.value.choose:t.value.addMoney
 })
 const hardwareWarnings=computed(()=>fresh.value?hardwareWarningTexts(state.value,t.value):[])
+const waitingLabel=computed(()=>manualPause.value?t.value.pause:parameters.value?.requireTotalStopTrigger===false?t.value.choose:t.value.trigger)
 const timerLabel=computed(()=>state.value?.displayTimeKind==='free_pause'?t.value.freePause:state.value?.displayTimeKind==='paid_pause'?t.value.paidPause:t.value.time)
 const time=computed(()=>{
  const n=state.value?.remainingSeconds
@@ -160,14 +161,14 @@ watch(idleVisible, v=>{if(v)language.value=defaultLanguage(config.value)})
   </section>
   <div class="wash-programs">
   <div v-if="hardwareWarnings.length" class="hardware-warnings" role="status"><p v-for="warning in hardwareWarnings" :key="warning">⚠ {{warning}}</p></div>
-  <ProgramCards :pause-enabled="!dryFog||parameters?.pauseEnabled!==false||manualPause" v-if="design==='cards'" :programs="mainPrograms" :selected="selected" :active="running" :disabled="!ready" :t="t" :heading="dryFog?t.aromaHeading:undefined" :language="language" :pause-state="pauseVisual" :center-label="!selected&&!(credit>0)?t.addMoney:centerLabel" :center-sub="cardCenterSub" :center-icon="!selected?(credit>0?'water':'wallet'):manualPause?'play':'pause'" :center-disabled="centerDisabled" @select="choose" @center="center"/>
+  <ProgramCards :waiting-label="waitingLabel" :pause-enabled="!dryFog||parameters?.pauseEnabled!==false||manualPause" v-if="design==='cards'" :programs="mainPrograms" :selected="selected" :active="running" :disabled="!ready" :t="t" :heading="dryFog?t.aromaHeading:undefined" :language="language" :pause-state="pauseVisual" :center-label="!selected&&!(credit>0)?t.addMoney:centerLabel" :center-sub="cardCenterSub" :center-icon="!selected?(credit>0?'water':'wallet'):manualPause?'play':'pause'" :center-disabled="centerDisabled" @select="choose" @center="center"/>
   <section v-else class="wash-wheel-area">
    <ProgramWheel :running-label="t.runningBadge" :theme="appearance" :programs="mainPrograms" :selected="selected" :active="running" :pause-state="pauseVisual" :disabled="!ready" :center-label="centerLabel" :center-sub="centerSub" :center-icon="manualPause||!selected?'play':'pause'" :center-disabled="centerDisabled" @select="choose" @center="center"/>
   </section>
   </div>
   <section v-if="optionalPrograms.length" class="wash-optional" :class="{'has-running-extra':dryFog&&running&&optionalPrograms.some(p=>p.id===selected)}">
    <h2>{{ t.optional }}</h2>
-   <div><button v-for="p in optionalPrograms" :key="p.id" :data-program="p.id" :class="{selected:selected===p.id,running:running&&selected===p.id}" :style="{'--optional-tone':(dryFog?dryFogTones:appearance==='light'?lightTones:darkActiveTones)[p.id],'--optional-ink':programInk(appearance,p.id)}" :aria-label="p.label" :aria-pressed="selected===p.id" :disabled="!ready" @click="choose(p.id)"><img v-if="design==='cards'" class="mode-photo" :src="modePhoto(p.id)" alt="" decoding="async"/><WashIcon :name="p.id"/><span><strong :class="{'long-name':p.label.length>10}">{{ p.label }}</strong><small v-if="dryFog&&running&&selected===p.id" class="extra-active-badge"><span aria-hidden="true">✓</span> {{t.runningBadge}}</small><small v-else>{{ design==='cards' && selected===p.id ? (running?t.running:t.trigger) : p.description }}</small></span><b v-if="design!=='cards'" aria-hidden="true">{{selected===p.id?'✓':'+'}}</b><span v-else-if="running&&selected===p.id" class="mode-running-dot" aria-hidden="true"></span></button></div>
+   <div><button v-for="p in optionalPrograms" :key="p.id" :data-program="p.id" :class="{selected:selected===p.id,running:running&&selected===p.id}" :style="{'--optional-tone':(dryFog?dryFogTones:appearance==='light'?lightTones:darkActiveTones)[p.id],'--optional-ink':programInk(appearance,p.id)}" :aria-label="p.label" :aria-pressed="selected===p.id" :disabled="!ready" @click="choose(p.id)"><img v-if="design==='cards'" class="mode-photo" :src="modePhoto(p.id)" alt="" decoding="async"/><WashIcon :name="p.id"/><span><strong :class="{'long-name':p.label.length>10}">{{ p.label }}</strong><small v-if="dryFog&&running&&selected===p.id" class="extra-active-badge"><span aria-hidden="true">✓</span> {{t.runningBadge}}</small><small v-else>{{ design==='cards' && selected===p.id ? (running?t.running:waitingLabel) : p.description }}</small></span><b v-if="design!=='cards'" aria-hidden="true">{{selected===p.id?'✓':'+'}}</b><span v-else-if="running&&selected===p.id" class="mode-running-dot" aria-hidden="true"></span></button></div>
   </section>
   <button class="wash-topup" :aria-label="t.topup" :class="{emphasized:credit===0||paymentPending}" :disabled="!ready&&!paymentPending" @click="paymentOpen=true"><span><WashIcon name="wallet"/><span class="topup-title"><strong>{{design==='cards'&&!(credit>0)?t.readyToWash:t.topup}}</strong><small v-if="design==='cards'&&!(credit>0)">{{t.choosePayment}}</small></span><b aria-hidden="true">+</b></span><span class="topup-methods"><span><WashIcon name="cash"/>{{ t.cash }}</span><span><WashIcon name="qr"/>QR</span><span><WashIcon name="card"/>{{ t.card }}</span></span></button>
   <WashFooter :preview="preview" :contacts="config?.contacts" :station="station" :t="t" @open="socialOpen=$event"/>
