@@ -59,10 +59,10 @@ def capture(runtime,io,*,recover=False):
             from .bonus import award, remaining, add, restore
             bonus=award(amount,runtime.params)
             available=amount+bonus
-            held=bool(recover or runtime.state.get('licenseLocked') or runtime.active_session_source=='vip'
+            held=bool(recover or runtime.state.get('licenseRetirementPending') or runtime.state.get('licenseLocked') or runtime.active_session_source=='vip'
                       or runtime.state.get('walletTransferPending'))
             payload={'bonus_sum':bonus,'bonus_domain':runtime.params.get('bonusDomain','shared'),'nv9_stream_id':stream,'first_pulse':previous+1,'rising_count':total,'sum_per_pulse':price,
-                     'held_reason':'restart_or_io_fault' if recover else ('license_locked' if runtime.state.get('licenseLocked') else ('vip' if runtime.active_session_source=='vip' else 'wallet_transfer_pending')) if held else None}
+                     'held_reason':'restart_or_io_fault' if recover else ('license_locked' if runtime.state.get('licenseLocked') or runtime.state.get('licenseRetirementPending') else ('vip' if runtime.active_session_source=='vip' else 'wallet_transfer_pending')) if held else None}
             receipt=f'nv9:{stream}:{previous+1}:{total}'
             if held:
                 sid=conn.execute("INSERT INTO wash_sessions(status,source,paid_sum,final_credit_sum,ended_at,finished_at,close_reason,metadata) VALUES('ended','cash',%s,%s,now(),now(),'nv9_cash_recovery',%s) RETURNING id",

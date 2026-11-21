@@ -74,6 +74,15 @@ class CashIngestTests(unittest.TestCase):
         self.capture(1);self.assertEqual(self.runtime.state['creditSum'],9000)
         self.runtime.active_session_source=None;self.runtime.state['licenseLocked']=True
         self.capture(2);self.assertEqual(self.runtime.state['creditSum'],9000);self.assertEqual(self.count('recovery_credits'),2)
+    def test_retirement_cash_is_held_once_without_extending_paid_session(self):
+        self.runtime.state.update(licenseRetirementPending=True,creditSum=7000)
+        self.capture(2);self.capture(2)
+        self.assertEqual(self.runtime.state['creditSum'],7000)
+        self.assertEqual(self.runtime.state['walletCashHeld'],2000)
+        self.assertEqual(self.count('recovery_credits'),1)
+        self.assertEqual(self.conn.execute('SELECT amount_sum FROM payments').fetchone()['amount_sum'],2000)
+        self.assertEqual(self.conn.execute('SELECT raw_payload FROM payments').fetchone()['raw_payload']['held_reason'],'license_locked')
+
     def test_counter_rollback_is_rejected_and_different_stream_is_independent(self):
         self.capture(2)
         with self.assertRaises(RuntimeError):self.capture(1)

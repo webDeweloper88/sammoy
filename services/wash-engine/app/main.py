@@ -1092,6 +1092,8 @@ def public_license_row(row: dict | None, config: dict[str, object] | None = None
             "license_duration_type": raw_payload.get("license_duration_type") or "",
             "activation_status": raw_payload.get("activation_status") or "",
             "hardware_bound": bool(raw_payload.get("hardware_bound")),
+            "lifecycle": raw_payload.get("lifecycle") or {},
+            "online_lease_until": raw_payload.get("online_lease_until"),
         }
     if not row:
         return {
@@ -1132,6 +1134,8 @@ def public_license_row(row: dict | None, config: dict[str, object] | None = None
         "license_duration_type": raw_payload.get("license_duration_type") or "",
         "activation_status": raw_payload.get("activation_status") or "",
         "hardware_bound": bool(raw_payload.get("hardware_bound")),
+        "lifecycle": raw_payload.get("lifecycle") or {},
+        "online_lease_until": raw_payload.get("online_lease_until"),
     }
 
 
@@ -1149,6 +1153,11 @@ def evaluate_license_lock(row: dict | None, config: dict[str, object] | None = N
         return public_license_row(None, config)
     valid_until = row.get("valid_until")
     grace_until = row.get("grace_until")
+    raw_payload=row.get('raw_payload') or {}
+    lease_until=parse_dt(raw_payload.get('online_lease_until'))
+    # Online authorization is bounded even when upgrading an older cache.
+    if not lease_until and raw_payload.get('operation_mode','online')=='online' and row.get('last_success_at'):
+        lease_until=row['last_success_at']+timedelta(hours=24)
     locked = False
     state = "valid"
     reason = "license valid"
@@ -1164,6 +1173,10 @@ def evaluate_license_lock(row: dict | None, config: dict[str, object] | None = N
         locked = True
         state = "expired"
         reason = "license expired"
+    elif lease_until and lease_until <= now:
+        locked = True
+        state = 'online_lease_expired'
+        reason = 'Online authorization expired; reconnect to the gateway'
     elif row.get("last_error") or (grace_until and grace_until < now):
         state = "grace"
         reason = "using validated cached license; offline operation does not extend license expiry"
@@ -1186,6 +1199,7 @@ def apply_license_to_runtime() -> dict[str, object]:
 
 async def sync_license_once() -> dict[str, object]:
     config = get_license_settings()
+    sync_interval=min(60,int(config["sync_interval_seconds"]))
     now = datetime.now(UTC)
     if not config.get("enabled"):
         status_payload = apply_license_to_runtime()
@@ -1215,7 +1229,7 @@ async def sync_license_once() -> dict[str, object]:
                     f"license settings incomplete: {', '.join(missing)}",
                     config.get("site_code") or "",
                     config.get("post_no") or 1,
-                    int(config["sync_interval_seconds"]),
+                    sync_interval,
                     f"missing {', '.join(missing)}",
                 ),
             ).fetchone()
@@ -1225,10 +1239,12 @@ async def sync_license_once() -> dict[str, object]:
     await sync_pending_offline_license_codes(config)
 
     try:
+        from .license_lifecycle import receipt
         sync_payload = {
             "site_code": config["site_code"],
             "post_no": config["post_no"],
             **hardware_sync_payload(config),
+            **receipt(wash_runtime.snapshot()['state']),
         }
         async with httpx.AsyncClient(timeout=8.0) as client:
             sync_response = await client.post(
@@ -1240,12 +1256,13 @@ async def sync_license_once() -> dict[str, object]:
                 raise RuntimeError(sync_response.text[:240])
             response = await client.get(
                 f"{config['gateway_url']}/api/v1/license/status",
-                params={"site_code": config["site_code"], "post_no": config["post_no"]},
+                params={"site_code": config["site_code"], "post_no": config["post_no"],"hardware_fingerprint_hash":hardware_sync_payload(config).get('hardware_fingerprint_hash')},
                 headers={"X-Site-Token": str(config["site_token"])},
             )
         if response.status_code >= 400:
             raise RuntimeError(response.text[:240])
         payload = response.json().get("license") or {}
+        if (payload.get('lifecycle') or {}).get('state')=='revocation_pending':sync_interval=5
         license_enabled = bool(payload.get("enabled"))
         valid_until = parse_dt(payload.get("valid_until"))
         last_success = now
@@ -1298,7 +1315,7 @@ async def sync_license_once() -> dict[str, object]:
                     last_success,
                     now,
                     now,
-                    int(config["sync_interval_seconds"]),
+                    sync_interval,
                     grace_until,
                     Jsonb(payload),
                 ),
@@ -1319,7 +1336,7 @@ async def sync_license_once() -> dict[str, object]:
                     WHERE id = 1
                     RETURNING *
                     """,
-                    (int(config["sync_interval_seconds"]), detail),
+                    (sync_interval, detail),
                 ).fetchone()
             else:
                 row = conn.execute(
@@ -1331,7 +1348,7 @@ async def sync_license_once() -> dict[str, object]:
                             now(), now() + (%s || ' seconds')::interval, now(), %s, now())
                     RETURNING *
                     """,
-                    (config["site_code"], config["post_no"], int(config["sync_interval_seconds"]), detail),
+                    (config["site_code"], config["post_no"], sync_interval, detail),
                 ).fetchone()
             conn.commit()
         status_payload = apply_license_to_runtime()

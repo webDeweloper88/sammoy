@@ -11,8 +11,8 @@ class OfflineOperationTests(unittest.TestCase):
         return {'enabled':True,'locked':False,'state':'valid','reason':'valid','site_code':'SITE',
             'post_no':1,'machine_id':'test','days_left':None,'valid_until':None,
             'last_success_at':now-timedelta(days=60),'last_attempt_at':now,'next_sync_at':now,
-            'grace_until':now-timedelta(days=50),'last_error':'network unavailable','raw_payload':{},**changes}
-    def test_permanent_cached_license_survives_long_internet_outage(self):
+            'grace_until':now-timedelta(days=50),'last_error':'network unavailable','raw_payload':{'operation_mode':'offline_cash_only'},**changes}
+    def test_explicit_offline_cash_license_survives_long_internet_outage(self):
         result=evaluate_license_lock(self.row(),{'enabled':True})
         self.assertFalse(result['locked']);self.assertEqual(result['state'],'grace')
     def test_time_limited_cached_license_keeps_its_actual_expiration(self):

@@ -619,6 +619,8 @@ class WashRuntime:
             cancel(self)
             if self.shared_wallet_enabled and self.active_session_source=='vip' and source!='vip':
                 raise ValueError('Денежное пополнение не смешивается с VIP-допуском')
+            if self.state.get('licenseRetirementPending') and source!='admin':
+                raise ValueError('Station is retiring; new payments are not accepted')
             if self.state.get("licenseLocked") and source != "admin":
                 self.state["phase"] = "license_locked"
                 self.state["updatedAt"] = now_iso()
@@ -713,6 +715,12 @@ class WashRuntime:
                         "last_error": "simulation: gateway unavailable",
                         "simulation": True,
                     }
+            from .license_lifecycle import idle
+            retiring=((payload or {}).get('lifecycle') or {}).get('state')=='revocation_pending'
+            self.state['licenseRetirementPending']=retiring
+            if retiring and idle(self.state):
+                locked=True
+                reason='Station access revoked; no new sessions allowed'
             was_locked = bool(self.state.get("licenseLocked"))
             self.state["licenseLocked"] = bool(locked)
             self.state["licenseReason"] = reason
@@ -1548,6 +1556,9 @@ class WashRuntime:
             return
         from .service_access import intercept
         if intercept(self, uid):
+            return
+        if self.state.get('licenseRetirementPending') and uid!=self.active_session_card_uid:
+            self.state['lastRfidStatus']='license_retiring'
             return
         if self.shared_wallet_enabled:
             from .wallet_post import handle_card, pending_job, freeze

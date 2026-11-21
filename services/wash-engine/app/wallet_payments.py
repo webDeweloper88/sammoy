@@ -101,7 +101,9 @@ def defer_vip_cash(runtime,amount,source,pulse_count,raw):
     Preserve it as a separate recoverable monetary credit rather than mixing it
     into a virtual VIP grant. Duplicate physical events have a stable ledger key.
     """
-    if not runtime.shared_wallet_enabled or (runtime.active_session_source!='vip' and not runtime.state.get('walletTransferVip')):return False
+    retiring=bool(runtime.state.get('licenseRetirementPending') or runtime.state.get('licenseLocked'))
+    if not retiring and (not runtime.shared_wallet_enabled or (runtime.active_session_source!='vip' and not runtime.state.get('walletTransferVip'))):return False
+    if retiring:raw={**raw,'held_reason':'license_locked'}
     identity=raw.get('rising_count',raw.get('physical_rising_count'))
     key=f"vip-cash:{runtime.active_session_id}:{source}:{identity}:{raw.get('simulated_pulses',0)}"
     with db() as conn:

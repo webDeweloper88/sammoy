@@ -48,6 +48,7 @@ const statusText=computed(()=>{
  if(!fresh.value)return t.value.offline
  if(s?.softwareUpdateJob)return t.value.softwareUpdating
  if(s?.licenseLocked)return t.value.locked
+ if(s?.licenseRetirementPending)return t.value.licenseRetiring
  if(s?.walletTransferPending)return s.walletOperationInProgress ? t.value.walletProcessing : t.value.walletPending
  if(!ready.value)return t.value.hardware
  if(error.value)return t.value.failed
@@ -163,7 +164,7 @@ watch(idleVisible, v=>{if(v)language.value=defaultLanguage(config.value)})
   <button class="wash-topup" :aria-label="t.topup" :class="{emphasized:credit===0||paymentPending}" :disabled="!ready&&!paymentPending" @click="paymentOpen=true"><span><WashIcon name="wallet"/><span class="topup-title"><strong>{{design==='cards'&&!(credit>0)?t.readyToWash:t.topup}}</strong><small v-if="design==='cards'&&!(credit>0)">{{t.choosePayment}}</small></span><b aria-hidden="true">+</b></span><span class="topup-methods"><span><WashIcon name="cash"/>{{ t.cash }}</span><span><WashIcon name="qr"/>QR</span><span><WashIcon name="card"/>{{ t.card }}</span></span></button>
   <WashFooter :preview="preview" :contacts="config?.contacts" :station="station" :t="t" @open="socialOpen=$event"/>
  </main>
- <PaymentSheet :preview="preview" @preview-credit="runtime.addCredit($event)" :open="paymentOpen" :t="t" :state="state" :ready="ready" :config="config" :options="paymentOptions" @close="paymentOpen=false" @pending="paymentPending=$event"/>
+ <PaymentSheet :preview="preview" @preview-credit="runtime.addCredit($event)" :open="paymentOpen" :t="t" :state="state" :ready="ready&&!state?.licenseRetirementPending" :config="config" :options="paymentOptions" @close="paymentOpen=false" @pending="paymentPending=$event"/>
 
  </div>
 </template>
