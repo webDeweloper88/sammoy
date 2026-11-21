@@ -103,3 +103,26 @@ reset policy. Inspection did not open watchdog device nodes, enable watchdogs,
 induce hangs or reboot either board. Actual recovery requires a separately
 controlled enablement and reboot test. RebootWatchdog alone is not runtime
 hang detection, and software relay shutdown cannot cover a complete OS hang.
+
+Watchdog enablement and acceptance, 2026-11-21: installed
+/etc/systemd/system.conf.d/60-labrix-watchdog.conf on both boards, with
+WatchdogDevice=/dev/watchdog0 and RuntimeWatchdogSec=10s; activated through
+systemctl daemon-reexec. PID 1 holds the watchdog descriptor on both systems.
+This protects against loss of the system manager/kernel servicing the watchdog;
+it is not a health check for an individual application while PID 1 stays alive.
+
+User explicitly authorized a controlled hang/reboot test, then excluded Radxa
+because it supplies the internet connection. Only CL3566 was crash-tested:
+all physical outputs confirmed OFF, customer balance zero, no active session;
+kernel.panic was already 0 (no kernel automatic panic reboot). A one-shot
+transient systemd timer triggered a deliberate kernel panic using sysrq c.
+Boot ID changed from c4f55500-7fbd-4f9b-9d82-b0c8f9bb23f7 to
+56142d5e-ff67-4f34-9e13-45a10f07c27b; SSH returned after approximately 30 seconds.
+All five application containers recovered healthy, I/O available, outputs OFF,
+no error or customer credit, and PID 1 again holds watchdog0 with the 10-second
+configuration. This demonstrates panic recovery, not every possible hardware
+failure. No Radxa crash test or reboot was performed; it remains enabled but
+recovery there is not yet physically acceptance-tested. Do not run a test on
+Radxa while it provides the maintenance network. Future crash tests require an
+idle test bench, load isolation, backups and an operator able to power-cycle if
+recovery fails; do not induce a crash on a customer-serving station.
