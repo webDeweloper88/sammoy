@@ -223,7 +223,8 @@ class Network:
     def temporary_finish(self,payload):
         value=read_temporary()
         if not value:return {'ok':True,'scheduled':False}
-        value['disconnect_at']=time.time()+30
+        value.setdefault('disconnect_at', time.time()+600)
+        value['expires_at']=max(value.get('expires_at',0),value['disconnect_at'])
         save_temporary(value)
         return {'ok':True,'scheduled':True,'disconnect_at':value['disconnect_at']}
 

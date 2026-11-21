@@ -91,3 +91,15 @@ Maintenance includes storage monitoring and cleanup status.
 See [retention and 32 GB storage policy](storage.md). Financial history is retained
 for 12 calendar months, events for one month, and technical journals have a shared
 256 MB budget. Current card balances and unclaimed recovery credit never expire.
+
+
+Hardware watchdog inspection, 2026-11-21: Cubie A7A 10.10.10.8 exposes
+/dev/watchdog0 through sunxi-wdt; CL3566 10.10.10.26 exposes it through dw_wdt.
+Both systemd managers report RuntimeWatchdogUSec=0 and RebootWatchdogUSec=10min.
+No userspace owner was found by fuser. The kernel builds do not expose the
+optional identity/state/timeout/nowayout watchdog sysfs attributes. Cubie boot
+log reports timeout=16 sec, nowayout=0; this is not proof of an armed operational
+reset policy. Inspection did not open watchdog device nodes, enable watchdogs,
+induce hangs or reboot either board. Actual recovery requires a separately
+controlled enablement and reboot test. RebootWatchdog alone is not runtime
+hang detection, and software relay shutdown cannot cover a complete OS hang.

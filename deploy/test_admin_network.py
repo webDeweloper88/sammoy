@@ -98,9 +98,17 @@ class TemporaryInternetTests(unittest.TestCase):
         n.nm.DeactivateConnection.assert_called_once_with('/active');n.interface.return_value.Delete.assert_called_once();n.nm.ActivateConnection.assert_called_once_with('/old','/wifi',m.dbus.ObjectPath('/'));self.assertFalse(m.TEMP.exists())
     def test_finish_delays_cleanup_for_browser_response(self):
         n=self.network();m.save_temporary(dict(expires_at=time.time()+7200,ssid='Phone'))
-        result=n.temporary_finish({});self.assertTrue(result['scheduled']);self.assertLess(abs(result['disconnect_at']-time.time()-30),2)
+        result=n.temporary_finish({});self.assertTrue(result['scheduled']);self.assertLess(abs(result['disconnect_at']-time.time()-600),2)
+        again=n.temporary_finish({});self.assertEqual(again['disconnect_at'],result['disconnect_at'])
         n.nm.DeactivateConnection.assert_not_called()
     def test_failed_restore_does_not_leave_stale_temp_state(self):
         n=self.network();n.props=Mock(return_value={'ActiveConnection':'/active'});n.interface=Mock();n.interface.return_value.GetSettings.return_value={'connection':{'id':'LABRIX temporary setup internet'}};n.nm.ActivateConnection.side_effect=m.dbus.DBusException('unavailable')
         m.save_temporary(dict(active='/active',device='/wifi',connection='/connection',previous_connection='/old'))
         self.assertIn('warning',n.temporary_disconnect({}));self.assertFalse(m.TEMP.exists())
+
+    def test_finish_extends_expiring_setup_lease_to_cover_ten_minutes(self):
+        n=self.network();m.save_temporary(dict(expires_at=time.time()+5,ssid='Phone'))
+        result=n.temporary_finish({})
+        value=m.read_temporary()
+        self.assertGreaterEqual(value['expires_at'],result['disconnect_at'])
+        self.assertGreater(result['disconnect_at']-time.time(),599)
