@@ -66,7 +66,11 @@ license_stop_event = threading.Event()
 license_thread: threading.Thread | None = None
 connectivity_stop_event = threading.Event()
 connectivity_thread: threading.Thread | None = None
-gateway_connectivity = GatewayConnectivity(offline_threshold=3, online_threshold=2)
+gateway_connectivity = GatewayConnectivity(offline_threshold=1, online_threshold=2)
+license_refresh_event = threading.Event()
+license_sync_mutex = threading.Lock()
+click_sync_mutex = threading.Lock()
+click_reconcile_thread = None
 CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 COMPACT_CODE_LENGTH = 20
 COMPACT_CODE_MAX_AGE_DAYS = 7
@@ -427,6 +431,8 @@ CREATE TABLE IF NOT EXISTS license_cache (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE license_cache ADD COLUMN IF NOT EXISTS clock_high_water TIMESTAMPTZ;
+
 CREATE TABLE IF NOT EXISTS offline_license_codes (
   nonce TEXT PRIMARY KEY,
   code_sha256 TEXT NOT NULL,
@@ -756,7 +762,8 @@ def apply_offline_commissioning_license(code: str, site_token: str, hardware: di
 
 
 def verify_commissioning_response_signature(response: dict[str, object]) -> None:
-    encoded_key = settings.commissioning_signing_public_key.strip()
+    from .license_authorization import public_key
+    encoded_key = settings.commissioning_signing_public_key.strip() or public_key()
     signature_text = str(response.get("signature") or "")
     if not encoded_key:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Commissioning public key is not configured")
@@ -1136,6 +1143,7 @@ def public_license_row(row: dict | None, config: dict[str, object] | None = None
         "hardware_bound": bool(raw_payload.get("hardware_bound")),
         "lifecycle": raw_payload.get("lifecycle") or {},
         "online_lease_until": raw_payload.get("online_lease_until"),
+        "authorization_mode": raw_payload.get("authorization_mode", "legacy"),
     }
 
 
@@ -1151,17 +1159,36 @@ def evaluate_license_lock(row: dict | None, config: dict[str, object] | None = N
     now = datetime.now(UTC)
     if not row:
         return public_license_row(None, config)
+    signed=False
+    envelope=(row.get('raw_payload') or {}).get('authorization')
+    commissioning=(row.get('raw_payload') or {}).get('commissioning_authorization')
+    if envelope or commissioning:
+        from .license_authorization import verify,clock
+        try:
+            if envelope:license,issued=verify(envelope,config,hardware_sync_payload(config))
+            else:
+                from .license_authorization import verify_commissioning
+                license,issued=verify_commissioning(commissioning,config,hardware_sync_payload(config))
+            # Decision fields come from the signature, never mutable cache columns.
+            row={**row,**{k:license.get(k) for k in ('enabled','locked','reason','days_left','site_code','post_no','machine_id')}}
+            row['valid_until']=parse_dt(license.get('valid_until'))
+            row['raw_payload']={**license,**({'authorization':envelope} if envelope else {'commissioning_authorization':commissioning})}
+            now=clock.now(issued=issued,persisted=row.get('clock_high_water'))
+            signed=True
+        except (ValueError,OSError):
+            return public_license_row({**row,'locked':True,'state':'invalid_authorization','reason':'Invalid signed licence or controller binding'},config)
     valid_until = row.get("valid_until")
+    if signed and valid_until:row["days_left"]=max(0,int((valid_until-now).total_seconds()//86400))
     grace_until = row.get("grace_until")
     raw_payload=row.get('raw_payload') or {}
     lease_until=parse_dt(raw_payload.get('online_lease_until'))
     # Online authorization is bounded even when upgrading an older cache.
-    if not lease_until and raw_payload.get('operation_mode','online')=='online' and row.get('last_success_at'):
+    if not signed and not lease_until and raw_payload.get('operation_mode','online')=='online' and row.get('last_success_at'):
         lease_until=row['last_success_at']+timedelta(hours=24)
     locked = False
     state = "valid"
     reason = "license valid"
-    if not row.get("last_success_at"):
+    if not row.get("last_success_at") and not signed:
         locked = True
         state = row.get("state") if row.get("state") in {"settings_incomplete", "sync_failed"} else "sync_failed"
         reason = "license requires successful activation"
@@ -1173,7 +1200,7 @@ def evaluate_license_lock(row: dict | None, config: dict[str, object] | None = N
         locked = True
         state = "expired"
         reason = "license expired"
-    elif lease_until and lease_until <= now:
+    elif not signed and lease_until and lease_until <= now:
         locked = True
         state = 'online_lease_expired'
         reason = 'Online authorization expired; reconnect to the gateway'
@@ -1188,7 +1215,14 @@ def evaluate_license_lock(row: dict | None, config: dict[str, object] | None = N
 
 
 def apply_license_to_runtime() -> dict[str, object]:
-    status_payload = evaluate_license_lock(read_license_cache())
+    cached=read_license_cache()
+    status_payload = evaluate_license_lock(cached)
+    if status_payload.get('authorization_mode')=='local_signed' and status_payload.get('valid_until') and status_payload.get('state')!='invalid_authorization':
+        from .license_authorization import clock
+        current=clock.now();prior=cached.get('clock_high_water')
+        if prior is None or (current-prior).total_seconds()>=60:
+            with db() as conn:
+                conn.execute('UPDATE license_cache SET clock_high_water=GREATEST(clock_high_water,%s) WHERE id=1',(current,));conn.commit()
     wash_runtime.set_license_status(
         bool(status_payload["locked"]),
         str(status_payload["reason"]),
@@ -1197,9 +1231,83 @@ def apply_license_to_runtime() -> dict[str, object]:
     return status_payload
 
 
+def store_verified_license(payload,issued,config,*,fresh_server_time=False,previous_floor=None):
+    from .license_authorization import clock
+    now=datetime.now(UTC);sync_interval=min(900,int(config['sync_interval_seconds']))
+    if fresh_server_time:clock.reset(issued)
+    floor=issued if fresh_server_time else clock.now(issued=issued,persisted=previous_floor)
+    if (payload.get('lifecycle') or {}).get('state')=='revocation_pending':sync_interval=5
+    license_enabled = bool(payload.get("enabled"))
+    valid_until = parse_dt(payload.get("valid_until"))
+    last_success = issued
+    grace_until = now + timedelta(seconds=int(config["grace_seconds"]))
+    state = "valid" if license_enabled else "disabled"
+    reason = str(payload.get("reason") or ("license valid" if license_enabled else "license disabled by gateway"))
+    locked = not license_enabled or bool(payload.get("locked"))
+    if valid_until and valid_until < now:
+        locked = True
+        state = "expired"
+        reason = "license expired"
+    with db() as conn:
+        row = conn.execute(
+            """
+            INSERT INTO license_cache
+              (id, enabled, locked, state, reason, site_code, post_no, machine_id,
+               valid_until, days_left, last_success_at, last_attempt_at, next_sync_at,
+               grace_until, last_error, raw_payload, updated_at)
+            VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    %s + (%s || ' seconds')::interval, %s, '', %s, now())
+            ON CONFLICT (id) DO UPDATE
+            SET enabled = EXCLUDED.enabled,
+                locked = EXCLUDED.locked,
+                state = EXCLUDED.state,
+                reason = EXCLUDED.reason,
+                site_code = EXCLUDED.site_code,
+                post_no = EXCLUDED.post_no,
+                machine_id = EXCLUDED.machine_id,
+                valid_until = EXCLUDED.valid_until,
+                days_left = EXCLUDED.days_left,
+                last_success_at = EXCLUDED.last_success_at,
+                last_attempt_at = EXCLUDED.last_attempt_at,
+                next_sync_at = EXCLUDED.next_sync_at,
+                grace_until = EXCLUDED.grace_until,
+                last_error = '',
+                raw_payload = EXCLUDED.raw_payload,
+                updated_at = now()
+            RETURNING *
+            """,
+            (
+                license_enabled,
+                locked,
+                state,
+                reason,
+                config["site_code"],
+                config["post_no"],
+                payload.get("machine_id"),
+                valid_until,
+                payload.get("days_left"),
+                last_success,
+                now,
+                now,
+                sync_interval,
+                grace_until,
+                Jsonb(payload),
+            ),
+        ).fetchone()
+        conn.execute('UPDATE license_cache SET clock_high_water=%s WHERE id=1',(floor,))
+        conn.commit()
+    return row
+
+
 async def sync_license_once() -> dict[str, object]:
+    if not license_sync_mutex.acquire(blocking=False):
+        return {'ok':True,'synced':False,'in_progress':True,'license':apply_license_to_runtime()}
+    try:return await _sync_license_once()
+    finally:license_sync_mutex.release()
+
+async def _sync_license_once() -> dict[str, object]:
     config = get_license_settings()
-    sync_interval=min(60,int(config["sync_interval_seconds"]))
+    sync_interval=min(900,int(config["sync_interval_seconds"]))
     now = datetime.now(UTC)
     if not config.get("enabled"):
         status_payload = apply_license_to_runtime()
@@ -1239,6 +1347,9 @@ async def sync_license_once() -> dict[str, object]:
     await sync_pending_offline_license_codes(config)
 
     try:
+        import secrets
+        nonce=secrets.token_hex(16)
+        hardware=hardware_sync_payload(config)
         from .license_lifecycle import receipt
         sync_payload = {
             "site_code": config["site_code"],
@@ -1252,75 +1363,22 @@ async def sync_license_once() -> dict[str, object]:
                 json=sync_payload,
                 headers={"X-Site-Token": str(config["site_token"])},
             )
-            if sync_response.status_code >= 400:
+            if sync_response.status_code >= 400 and sync_response.status_code != 403:
                 raise RuntimeError(sync_response.text[:240])
             response = await client.get(
                 f"{config['gateway_url']}/api/v1/license/status",
-                params={"site_code": config["site_code"], "post_no": config["post_no"],"hardware_fingerprint_hash":hardware_sync_payload(config).get('hardware_fingerprint_hash')},
+                params={"site_code": config["site_code"], "post_no": config["post_no"],"hardware_fingerprint_hash":hardware.get('hardware_fingerprint_hash'),"authorization_protocol":1,"nonce":nonce},
                 headers={"X-Site-Token": str(config["site_token"])},
             )
         if response.status_code >= 400:
             raise RuntimeError(response.text[:240])
         payload = response.json().get("license") or {}
-        if (payload.get('lifecycle') or {}).get('state')=='revocation_pending':sync_interval=5
-        license_enabled = bool(payload.get("enabled"))
-        valid_until = parse_dt(payload.get("valid_until"))
-        last_success = now
-        grace_until = now + timedelta(seconds=int(config["grace_seconds"]))
-        state = "valid" if license_enabled else "disabled"
-        reason = str(payload.get("reason") or ("license valid" if license_enabled else "license disabled by gateway"))
-        locked = not license_enabled or bool(payload.get("locked"))
-        if valid_until and valid_until < now:
-            locked = True
-            state = "expired"
-            reason = "license expired"
-        with db() as conn:
-            row = conn.execute(
-                """
-                INSERT INTO license_cache
-                  (id, enabled, locked, state, reason, site_code, post_no, machine_id,
-                   valid_until, days_left, last_success_at, last_attempt_at, next_sync_at,
-                   grace_until, last_error, raw_payload, updated_at)
-                VALUES (1, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                        %s + (%s || ' seconds')::interval, %s, '', %s, now())
-                ON CONFLICT (id) DO UPDATE
-                SET enabled = EXCLUDED.enabled,
-                    locked = EXCLUDED.locked,
-                    state = EXCLUDED.state,
-                    reason = EXCLUDED.reason,
-                    site_code = EXCLUDED.site_code,
-                    post_no = EXCLUDED.post_no,
-                    machine_id = EXCLUDED.machine_id,
-                    valid_until = EXCLUDED.valid_until,
-                    days_left = EXCLUDED.days_left,
-                    last_success_at = EXCLUDED.last_success_at,
-                    last_attempt_at = EXCLUDED.last_attempt_at,
-                    next_sync_at = EXCLUDED.next_sync_at,
-                    grace_until = EXCLUDED.grace_until,
-                    last_error = '',
-                    raw_payload = EXCLUDED.raw_payload,
-                    updated_at = now()
-                RETURNING *
-                """,
-                (
-                    license_enabled,
-                    locked,
-                    state,
-                    reason,
-                    config["site_code"],
-                    config["post_no"],
-                    payload.get("machine_id"),
-                    valid_until,
-                    payload.get("days_left"),
-                    last_success,
-                    now,
-                    now,
-                    sync_interval,
-                    grace_until,
-                    Jsonb(payload),
-                ),
-            ).fetchone()
-            conn.commit()
+        from .license_authorization import verify
+        old=read_license_cache()
+        previous=(old.get('raw_payload') or {}).get('authorization') if old else None
+        core,issued=verify(payload.get('authorization') or {},config,hardware,nonce=nonce,previous=previous)
+        payload={**core,'authorization':payload['authorization']}
+        row=store_verified_license(payload,issued,config,fresh_server_time=True)
     except Exception as exc:
         detail = str(exc)[:300]
         with db() as conn:
@@ -1336,7 +1394,7 @@ async def sync_license_once() -> dict[str, object]:
                     WHERE id = 1
                     RETURNING *
                     """,
-                    (sync_interval, detail),
+                    (60, detail),
                 ).fetchone()
             else:
                 row = conn.execute(
@@ -1348,7 +1406,7 @@ async def sync_license_once() -> dict[str, object]:
                             now(), now() + (%s || ' seconds')::interval, now(), %s, now())
                     RETURNING *
                     """,
-                    (config["site_code"], config["post_no"], sync_interval, detail),
+                    (config["site_code"], config["post_no"], 60, detail),
                 ).fetchone()
             conn.commit()
         status_payload = apply_license_to_runtime()
@@ -1367,16 +1425,18 @@ def license_sync_loop() -> None:
             continue
         row = read_license_cache()
         next_sync_at = row.get("next_sync_at") if row else None
-        if not next_sync_at or next_sync_at <= datetime.now(UTC):
+        if license_refresh_event.is_set() or not next_sync_at or next_sync_at <= datetime.now(UTC):
+            license_refresh_event.clear()
             try:
                 import asyncio
 
                 asyncio.run(sync_license_once())
             except Exception as exc:
-                wash_runtime.set_license_status(True, f"license sync crashed: {str(exc)[:160]}", {"state": "sync_crashed"})
+                # A transport/worker failure cannot revoke a cached licence.
+                apply_license_to_runtime()
         else:
             apply_license_to_runtime()
-            wait_seconds = min(300, max(5, int((next_sync_at - datetime.now(UTC)).total_seconds())))
+            wait_seconds = min(5, max(1, int((next_sync_at - datetime.now(UTC)).total_seconds())))
             license_stop_event.wait(wait_seconds)
 
 
@@ -1401,17 +1461,20 @@ def check_gateway_connectivity_once() -> None:
                 follow_redirects=True,
             )
             response.raise_for_status()
+            health=response.json()
+            if health.get("ok") is not True or health.get("service")!="click-gateway" or health.get("database")!="ok":raise ValueError("Gateway health is not ready")
             success = True
             latency_ms = max(0, round((time_module.monotonic() - started) * 1000))
             error = ""
         except Exception as exc:
             error = str(exc)
-    gateway_connectivity.observe(
+    transition=gateway_connectivity.observe(
         gateway_url=gateway_url,
         success=success,
         latency_ms=latency_ms,
         error=error,
     )
+    if transition==(False,True):license_refresh_event.set()
 
 
 def connectivity_check_loop() -> None:
@@ -1424,9 +1487,21 @@ def connectivity_check_loop() -> None:
         connectivity_stop_event.wait(15)
 
 
+def click_reconciliation_loop():
+    while not connectivity_stop_event.wait(15):
+        try:
+            config=get_click_settings()
+            if config.get('enabled') and gateway_connectivity.available(str(config.get('gateway_url') or '')):
+                import asyncio
+                asyncio.run(sync_click_payments(config))
+        except Exception:
+            # Pending/paid provider records remain in the durable journal for retry.
+            pass
+
+
 @app.on_event("startup")
 def startup() -> None:
-    global connectivity_thread, license_thread
+    global connectivity_thread, license_thread, click_reconcile_thread
     open_pool()
     with db() as conn:
         conn.execute(SCHEMA_SQL)
@@ -1444,17 +1519,21 @@ def startup() -> None:
     wash_runtime.start()
     apply_license_to_runtime()
     license_stop_event.clear()
+    license_refresh_event.set()
     license_thread = threading.Thread(target=license_sync_loop, name="license-sync", daemon=True)
     license_thread.start()
     connectivity_stop_event.clear()
     connectivity_thread = threading.Thread(target=connectivity_check_loop, name="gateway-connectivity", daemon=True)
     connectivity_thread.start()
+    click_reconcile_thread=threading.Thread(target=click_reconciliation_loop,name="click-reconciliation",daemon=True)
+    click_reconcile_thread.start()
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
     await retention.stop()
     connectivity_stop_event.set()
+    if click_reconcile_thread:click_reconcile_thread.join(timeout=2)
     if connectivity_thread:
         connectivity_thread.join(timeout=2)
     license_stop_event.set()
@@ -2127,6 +2206,13 @@ def require_click_ready(config: dict[str, object]) -> None:
         raise HTTPException(status.HTTP_409_CONFLICT, f"Click settings are incomplete: {', '.join(missing)}")
 
 
+def require_click_gateway(config):
+    if not gateway_connectivity.available(str(config.get('gateway_url') or '')):
+        raise HTTPException(503,'Click temporarily unavailable')
+    if wash_runtime.snapshot()['state'].get('licenseRetirementPending'):
+        raise HTTPException(409,'Station is retiring; new payments are not accepted')
+
+
 def serialize_click_intent(row: dict) -> dict[str, object]:
     return {
         "id": str(row["id"]),
@@ -2223,7 +2309,7 @@ def apply_click_credit_once(intent_id: UUID) -> dict | None:
         conn.commit()
 
     from .wallet_payments import credit_confirmed
-    destination=credit_confirmed(wash_runtime,row) if wash_runtime.shared_wallet_enabled else None
+    destination=credit_confirmed(wash_runtime,row)
     if destination is None:
         wash_runtime.add_credit(
             amount_sum,
@@ -2234,6 +2320,8 @@ def apply_click_credit_once(intent_id: UUID) -> dict | None:
         )
 
     with db() as conn:
+        if not conn.execute('SELECT 1 FROM payments WHERE idempotency_key=%s',(f'click:{gateway_id}',)).fetchone():
+            raise RuntimeError('Confirmed Click payment has not been committed; retry reconciliation')
         updated = conn.execute(
             """
             UPDATE click_payment_intents
@@ -2251,6 +2339,16 @@ def apply_click_credit_once(intent_id: UUID) -> dict | None:
 
 
 async def sync_click_payments(config: dict[str, object] | None = None) -> dict[str, object]:
+    if not click_sync_mutex.acquire(blocking=False):return {'ok':True,'in_progress':True}
+    try:return await _sync_click_payments(config)
+    except (httpx.TransportError,HTTPException) as exc:
+        if isinstance(exc,httpx.TransportError) or exc.status_code>=500:
+            current=config or get_click_settings()
+            gateway_connectivity.observe(gateway_url=str(current.get('gateway_url') or ''),success=False,error=str(exc))
+        raise
+    finally:click_sync_mutex.release()
+
+async def _sync_click_payments(config: dict[str, object] | None = None) -> dict[str, object]:
     config = config or get_click_settings()
     require_click_ready(config)
     url = f"{config['gateway_url']}/api/v1/site/payments/export"
@@ -2396,6 +2494,24 @@ async def wash_license_sync() -> dict[str, object]:
     if not current.get("locked"):
         return {"ok": True, "synced": False, "license": current}
     return await sync_license_once()
+
+
+@app.post('/api/admin/license/authorization-file')
+async def import_license_authorization(file:UploadFile=File(...),user=Depends(require_role('admin'))):
+    from .admin_service import require_idle
+    from .license_authorization import verify
+    require_idle(wash_runtime)
+    raw=await file.read(65537)
+    if len(raw)>65536:raise HTTPException(413,'Licence file is too large')
+    config=get_license_settings();previous=read_license_cache()
+    try:
+        value=json.loads(raw)
+        if value.get('schema')!='labrix.license-file.v1':raise ValueError('Unsupported licence file')
+        envelope=value['authorization']
+        core,issued=verify(envelope,config,hardware_sync_payload(config),previous=(previous.get('raw_payload') or {}).get('authorization') if previous else None)
+    except (ValueError,KeyError,TypeError):raise HTTPException(400,'Invalid signed licence file or controller binding') from None
+    store_verified_license({**core,'authorization':envelope},issued,config,previous_floor=(previous or {}).get('clock_high_water'))
+    return {'ok':True,'license':apply_license_to_runtime()}
 
 
 @app.post("/api/admin/license/offline-code")
@@ -2941,6 +3057,8 @@ async def commissioning_offline_response(file: UploadFile = File(...)) -> dict[s
     save_commissioning_config(
         site_code, post_no, gateway_url, site_token, bool(response.get("click_enabled")),
     )
+    with db() as conn:
+        conn.execute("UPDATE license_cache SET raw_payload=raw_payload||%s WHERE id=1",(Jsonb({'commissioning_authorization':response}),));conn.commit()
     current = await commissioning_status()
     return {**current, "imported": True}
 
@@ -3166,6 +3284,7 @@ async def create_click_intent(payload: ClickIntentRequest) -> dict[str, object]:
         raise HTTPException(status.HTTP_423_LOCKED, f"License locked: {license_status.get('reason')}")
     config = get_click_settings()
     require_click_ready(config)
+    require_click_gateway(config)
     amount_sum = int(payload.amount_sum)
     if amount_sum < int(config["min_amount_sum"]) or amount_sum > int(config["max_amount_sum"]):
         raise HTTPException(
@@ -3283,6 +3402,8 @@ async def create_click_intent(payload: ClickIntentRequest) -> dict[str, object]:
                 ).fetchone()
             conn.commit()
     except Exception as exc:
+        if isinstance(exc,httpx.TransportError) or ('response' in locals() and (response.status_code>=500 or response.status_code<300)):
+            gateway_connectivity.observe(gateway_url=str(config['gateway_url']),success=False,error=str(exc))
         with db() as conn:
             row = conn.execute(
                 """

@@ -12,7 +12,6 @@ ALTER TABLE click_payment_intents ADD COLUMN IF NOT EXISTS wallet_credit_destina
 
 
 def bind_new_intent(runtime):
-    if not runtime.shared_wallet_enabled:return None,None
     with runtime.lock:
         if runtime.active_session_source=='vip':
             raise ValueError('Завершите VIP-сеанс перед денежной оплатой')
@@ -41,7 +40,7 @@ def credit_confirmed(runtime,row):
     amount=int(row['amount_sum']);bonus=int(row.get('bonus_sum') or 0);gateway=str(row.get('gateway_intent_id') or row['id'])
     key='click:'+gateway
     with runtime.lock:
-        if origin and runtime.active_session_id==origin and not runtime.state.get('walletTransferPending') and runtime.active_session_source!='vip':
+        if origin and runtime.active_session_id==origin and not runtime.state.get('walletTransferPending') and runtime.active_session_source!='vip' and not runtime.state.get('licenseLocked') and not runtime.state.get('licenseRetirementPending'):
             runtime.add_credit(amount,'click',idempotency_key=key,raw_payload={'intent_id':str(row['id']),'origin_session_id':origin},bonus_sum=bonus)
             return 'post'
         uid=row.get('wallet_origin_uid')
@@ -49,6 +48,7 @@ def credit_confirmed(runtime,row):
             with db() as conn:
                 session=conn.execute('SELECT metadata FROM wash_sessions WHERE id=%s',(origin,)).fetchone()
             uid=(session['metadata'] or {}).get('wallet_uid') if session else None
+        if not runtime.shared_wallet_enabled:uid=None
         if uid:
             card=wallet_client.inspect(uid)
             if card and card['state'].get('card_type')!='customer':uid=None
@@ -82,7 +82,7 @@ def credit_confirmed(runtime,row):
 
 
 def waiting_payment(runtime):
-    if not runtime.shared_wallet_enabled or not runtime.state.get('onlinePaymentPending') or not runtime.active_session_id:
+    if not runtime.state.get('onlinePaymentPending') or not runtime.active_session_id:
         return False
     with db() as conn:
         row=conn.execute("SELECT 1 FROM click_payment_intents WHERE wallet_origin_session_id=%s AND status IN ('local_pending','pending','prepared','paid') AND credited_at IS NULL AND created_at>now()-interval '30 minutes' LIMIT 1",

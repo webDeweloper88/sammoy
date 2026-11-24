@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import threading
+import time
 from typing import Any
 
 
@@ -18,6 +19,7 @@ class GatewayConnectivity:
         self.checked_at: str | None = None
         self.latency_ms: int | None = None
         self.error = "not checked"
+        self.last_observed = None
 
     def observe(
         self,
@@ -39,6 +41,7 @@ class GatewayConnectivity:
             previous = self.online
             was_initialized = self.initialized
             self.checked_at = datetime.now(UTC).isoformat()
+            self.last_observed = time.monotonic()
             self.latency_ms = latency_ms if success else None
             self.error = "" if success else (error or "gateway unavailable")[:160]
 
@@ -61,10 +64,15 @@ class GatewayConnectivity:
                 return previous, self.online
             return None
 
+    def available(self,gateway_url,*,max_age=45):
+        with self.lock:
+            return bool(self.initialized and self.online and self.gateway_url==gateway_url.rstrip('/') and
+                        self.last_observed is not None and time.monotonic()-self.last_observed<=max_age)
+
     def snapshot(self) -> dict[str, Any]:
         with self.lock:
             return {
-                "internetOnline": self.online,
+                "internetOnline": bool(self.online and self.last_observed is not None and time.monotonic()-self.last_observed<=45),
                 "internetCheckedAt": self.checked_at,
                 "internetLatencyMs": self.latency_ms,
             }

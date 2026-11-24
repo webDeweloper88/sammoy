@@ -13,6 +13,7 @@ const rows = {
  cashWarning:["Naqd pul qabul qilish vaqtincha mavjud emas.", "Қолма-қол ақша қабылдау уақытша қолжетімсіз.", "Нак акча кабыл алуу убактылуу жеткиликсиз.", "Приём наличных временно недоступен."],
 
  licenseRetiring:['Post yopilmoqda. Yangi to‘lov qabul qilinmaydi; to‘langan seansni yakunlang.','Пост жабылуда. Жаңа төлем қабылданбайды; төленген сеансты аяқтаңыз.','Пост жабылууда. Жаңы төлөм кабыл алынбайт; төлөнгөн сеансты бүтүрүңүз.','Пост выводится из работы. Новые оплаты недоступны; завершите оплаченный сеанс.'],
+ clickUnavailable:['Click vaqtincha mavjud emas','Click уақытша қолжетімсіз','Click убактылуу жеткиликсиз','Click временно недоступен'],
  noInternet:['Internet aloqasi yo‘q','Интернет байланысы жоқ','Интернет байланышы жок','Нет подключения к интернету'],
  vipDeviceNotAllowed:['Bu VIP karta ushbu xizmat uchun yoqilmagan. Boshqa to‘lov usulini tanlang.','Бұл VIP карта осы қызметке қосылмаған. Басқа төлем тәсілін таңдаңыз.','Бул VIP карта бул кызмат үчүн иштетилген эмес. Башка төлөм ыкмасын тандаңыз.','Эта VIP-карта недоступна для данной услуги. Выберите другой способ оплаты.'],
  bonusNotForDevice:['Kartadagi bonus bu xizmat uchun amal qilmaydi. Boshqa to‘lov usulini tanlang.','Картадағы бонус бұл қызметке жарамсыз. Басқа төлем тәсілін таңдаңыз.','Картадагы бонус бул кызматка жараксыз. Башка төлөм ыкмасын тандаңыз.','Бонус на карте не действует для этой услуги. Выберите другой способ оплаты.'],

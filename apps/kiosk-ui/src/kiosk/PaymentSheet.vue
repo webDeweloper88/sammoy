@@ -81,7 +81,7 @@ onUnmounted(()=>{stopped=true;clearTimeout(timer);clearTimeout(successTimer)})
    <p v-if="isVip" class="payment-vip-note" role="status">{{t.vipPaymentHint}}</p>
    <div v-if="!method" class="payment-methods">
     <button class="payment-method payment-method-cash" :aria-label="t.cash" :disabled="!ready||isVip||state?.billInputReady===false" @click="method='cash'"><WashIcon name="cash"/><span><strong>{{ t.cash }}</strong><small>{{ isVip?t.vipPaymentBlocked:state?.billInputReady===false?t.cashUnavailable:ready?t.cashShort:t.unavailable }}</small></span><b aria-hidden="true">›</b></button>
-    <button class="payment-method payment-method-qr" :aria-label="t.qr" :disabled="!clickReady&&!pending" @click="method='qr'"><WashIcon name="qr"/><span><strong>{{ t.qr }}</strong><small>{{ pending?t.pendingQr:isVip?t.vipPaymentBlocked:clickReady?'Click':options?.click?.enabled&&state?.internetOnline===false?t.noInternet:t.unavailable }}</small></span><b aria-hidden="true">›</b></button>
+    <button class="payment-method payment-method-qr" :aria-label="t.qr" :disabled="!clickReady&&!pending" @click="method='qr'"><WashIcon name="qr"/><span><strong>{{ t.qr }}</strong><small>{{ pending?t.pendingQr:isVip?t.vipPaymentBlocked:clickReady?'Click':options?.click?.enabled&&state?.internetOnline===false?(t.clickUnavailable||t.noInternet):t.unavailable }}</small></span><b aria-hidden="true">›</b></button>
     <button class="payment-method payment-method-card" :aria-label="t.card" :disabled="!ready || state?.nfcReady===false || state?.lastRfidStatus==='offline' || state?.lastRfidStatus==='not_checked'" @click="method='card'"><WashIcon name="card"/><span><strong>{{ t.card }}</strong><small>{{state?.nfcReady===false?t.nfcUnavailable:t.cardShort}}</small></span><b aria-hidden="true">›</b></button>
    </div>
    <template v-else-if="method==='cash'||method==='card'">
@@ -98,10 +98,11 @@ onUnmounted(()=>{stopped=true;clearTimeout(timer);clearTimeout(successTimer)})
      <p v-if="intent.status==='credited'" role="status">{{ intent.credit_destination==='wallet'?t.walletCredited:intent.credit_destination==='recovery'?t.paymentRecovery:t.credited }}</p>
      <p v-else-if="terminal.includes(intent.status)">{{ t.expired }}</p>
      <template v-else>
-      <QrcodeVue v-if="qrUrl" :value="qrUrl" :size="360" level="M" render-as="svg" class="payment-qr" :aria-label="t.scan"/>
-      <p>{{ preview?'DEMO · QR не для оплаты':qrUrl?t.scan:t.processing }}</p><button v-if="preview" class="sheet-action" @click="emit('preview-credit',intent.amount_sum);receive({intent:{...intent,status:'credited'}})">Тест: подтвердить оплату</button><p>{{ intent.status==='paid'||intent.status==='prepared'?t.processing:t.waiting }}</p>
+      <p v-if="!preview&&state?.internetOnline!==true" role="status">{{t.clickUnavailable||t.noInternet}}. {{t.qrUnknown}}</p>
+      <QrcodeVue v-if="qrUrl&&(preview||state?.internetOnline===true)" :value="qrUrl" :size="360" level="M" render-as="svg" class="payment-qr" :aria-label="t.scan"/>
+      <p>{{ preview?'DEMO · QR не для оплаты':qrUrl&&(preview||state?.internetOnline===true)?t.scan:t.processing }}</p><button v-if="preview" class="sheet-action" @click="emit('preview-credit',intent.amount_sum);receive({intent:{...intent,status:'credited'}})">Тест: подтвердить оплату</button><p>{{ intent.status==='paid'||intent.status==='prepared'?t.processing:t.waiting }}</p>
       <p v-if="pollFailed" role="alert" class="payment-error">{{ t.qrUnknown }}</p>
-      <button class="sheet-action" :disabled="busy||!['local_pending','pending'].includes(intent.status)" @click="cancel">{{ t.cancel }}</button>
+      <button class="sheet-action" :disabled="busy||(!preview&&state?.internetOnline!==true)||!['local_pending','pending'].includes(intent.status)" @click="cancel">{{ t.cancel }}</button>
      </template>
      <button v-if="terminal.includes(intent.status)" class="sheet-action" @click="intent=null">{{ t.back }}</button>
     </template>

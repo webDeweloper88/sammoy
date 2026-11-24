@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
+    "test:licensing": "node tests/licensing.mjs",
     "test:onboarding": "node tests/onboarding.mjs",
     "test:touch": "node tests/touch.mjs",
     "test:owner": "node tests/owner.mjs",
