@@ -3918,7 +3918,7 @@ async def owner_telegram_status(user: Annotated[dict, Depends(require_role("owne
     from .wallet_api import configuration
     cfg=configuration()
     result=await telegram_setup_request("status")
-    return {**result,'manage_allowed':not cfg['enabled'] or cfg['local_post']==cfg['primary_post'],'primary_post':cfg['primary_post']}
+    return {**result,'manage_allowed':not cfg['enabled'] or cfg['local_post']==cfg['primary_post'],'primary_post':cfg['primary_post'],'primary_url':cfg['peer_urls'].get(str(cfg['primary_post']),cfg['peer_urls'].get(cfg['primary_post'],''))}
 
 
 @app.post("/api/owner/telegram-setup/{action}")
